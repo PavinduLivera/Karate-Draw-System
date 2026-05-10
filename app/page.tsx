@@ -48,7 +48,7 @@ export default function KarateApp() {
               <SwatchBook className="text-white w-6 h-6" />
             </div>
             <h1 className="text-xl font-extrabold tracking-tight uppercase">
-              Karate<span className="text-blue-600">OS</span>
+              Karate<span className="text-green-600">OS</span>
             </h1>
           </div>
           
@@ -116,7 +116,18 @@ export default function KarateApp() {
                 </div>
               </div>
             </div>
+            {/* Footer Section */}
+            <footer className="max-w-7xl mx-auto px-6 py-8 border-t border-slate-200 mt-10 print:hidden">
+              <div className="flex flex-col md:flex-row justify-between items-center gap-4 text-slate-500 text-sm font-medium">
+                <p>© {new Date().getFullYear()} Seishinwakai Karate-Do Association.</p>
+                <div className="flex items-center gap-2">
+                  <span className="w-2 h-2 bg-green-500 rounded-full animate-pulse"></span>
+                  System Powered by Seishinwakai
+                </div>
+              </div>
+            </footer>
           </div>
+          
         )}
 
         {view !== 'upload' && (
