@@ -39,7 +39,7 @@ export default function KarateApp() {
   };
 
   return (
-    <div className="min-h-screen bg-[#f8fafc] text-slate-900 font-sans">
+    <div className="min-h-screen bg-[#f8fafc] text-slate-900 font-sans print:bg-white print:min-h-0">
       {/* Top Header */}
       <header className="bg-white border-b border-slate-200 py-4 px-8 sticky top-0 z-10 print:hidden">
         <div className="max-w-7xl mx-auto flex justify-between items-center">
@@ -61,13 +61,13 @@ export default function KarateApp() {
         </div>
       </header>
 
-      <main className="max-w-7xl mx-auto p-6 md:p-10">
+      <main className="max-w-7xl mx-auto p-6 md:p-10 print:p-0 print:m-0 print:max-w-none">
         
         {view === 'upload' && (
           <div className="max-w-3xl mx-auto space-y-8 animate-in fade-in slide-in-from-bottom-4 duration-700">
             <div className="text-center space-y-2">
               <h2 className="text-4xl font-black text-slate-900">Tournament Dashboard</h2>
-              <p className="text-slate-500">Upload your entry list and generate official tournament sheets instantly.</p>
+              <p className="text-slate-500">Upload your entry list and generate tournament sheets instantly.</p>
             </div>
 
             {/* Upload Card */}
@@ -140,7 +140,7 @@ export default function KarateApp() {
               Back to Dashboard
             </button>
             
-            <div className="bg-white rounded-2xl shadow-sm border border-slate-200 min-h-[500px]">
+            <div className="bg-white rounded-2xl shadow-sm border border-slate-200 min-h-[500px] print:border-none print:shadow-none print:rounded-none print:min-h-0 print:p-0 print:m-0">
               {view === 'kata' && <KataSection data={data} />}
               {view === 'kumite' && <KumiteSection data={data} />}
             </div>

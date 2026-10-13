@@ -1,121 +1,335 @@
 "use client";
-import React from 'react';
-import { Printer, User, Trophy, Users } from 'lucide-react';
+import React, { useState } from 'react';
+import { 
+  Printer, 
+  Trophy, 
+  Users, 
+  Search, 
+  CheckSquare, 
+  Square, 
+  Edit3, 
+  Flame,
+  LayoutGrid,
+  Layers,
+  ListOrdered
+} from 'lucide-react';
+import KataDrawSheet from './KataDrawSheet';
 
-const KataSection = ({ data }: { data: any[] }) => {
-  const kataPlayers = data.filter(p => p.eventType === 'Kata');
+interface KataSectionProps {
+  data: any[];
+}
 
-  const groupedData = kataPlayers.reduce((groups: any, player) => {
+const KataSection: React.FC<KataSectionProps> = ({ data }) => {
+  const kataPlayers = data.filter((p) => p.eventType === 'Kata');
+
+  // Group players by unique category key (Category | Age Group | Gender)
+  const groupedData = kataPlayers.reduce((groups: Record<string, any[]>, player) => {
     const key = `${player.category} | ${player.ageGroup} | ${player.gender}`;
     if (!groups[key]) groups[key] = [];
     groups[key].push(player);
     return groups;
   }, {});
 
-  return (
-    <div className="space-y-8 p-1 animate-in fade-in duration-500">
-      {/* Action Header */}
-      <div className="flex justify-between items-end border-b border-slate-100 pb-6 print:hidden">
-        <div>
-          <h2 className="text-2xl font-black text-slate-900 flex items-center gap-2">
-            <Trophy className="text-orange-500" />
-            Kata Scoring Sheets
-          </h2>
-          <p className="text-slate-500 text-sm mt-1">Review and print official scoring sheets for each category.</p>
-        </div>
-        <button 
-          onClick={() => window.print()} 
-          className="bg-slate-900 hover:bg-black text-white px-6 py-2.5 rounded-xl font-bold flex items-center gap-2 shadow-lg shadow-slate-200 transition-all active:scale-95"
-        >
-          <Printer size={18} />
-          Print All Sheets
-        </button>
-      </div>
+  const categoryKeys = Object.keys(groupedData);
 
-      {Object.keys(groupedData).length > 0 ? (
-        Object.keys(groupedData).map((groupKey, index) => (
-          <div 
-            key={index} 
-            className="bg-white rounded-2xl border border-slate-200 shadow-sm mb-12 page-break print:shadow-none print:border-none print:m-0 print:p-0"
-          >
-            {/* Professional Sheet Header */}
-            <div className="p-8 text-center border-b border-slate-50 bg-slate-50/50 rounded-t-2xl print:bg-white print:pb-4">
-              <h3 className="text-3xl font-black uppercase tracking-tight text-slate-900 print:text-2xl">
-                {groupedData[groupKey][0]?.championship || "Tournament"}
-              </h3>
-              <div className="inline-flex items-center gap-3 mt-4 bg-orange-100 text-orange-700 px-4 py-1.5 rounded-full text-sm font-black uppercase tracking-widest print:bg-slate-100 print:text-black">
-                <Users size={16} />
-                <span>KATA</span>
-                <span className="opacity-30">|</span>
-                <span>{groupKey}</span>
+  // Championship title from data or default
+  const defaultChampionship = kataPlayers[0]?.championship || "COIMBATORE DISTRICT KARATE CHAMPIONSHIP 2025";
+  const [championshipTitle, setChampionshipTitle] = useState(defaultChampionship);
+  const [selectedCategory, setSelectedCategory] = useState<string>(categoryKeys[0] || "");
+  const [viewAll, setViewAll] = useState(false);
+  const [searchQuery, setSearchQuery] = useState("");
+  const [tatamiNumber, setTatamiNumber] = useState("Tatami 1");
+  const [isBlankMode, setIsBlankMode] = useState(false);
+
+  // Fixed player row count per sheet (e.g. 8, 10, 12, 16)
+  const [rowsPerPage, setRowsPerPage] = useState<number>(10);
+
+  // Print orientation (portrait or landscape)
+  const [printOrientation, setPrintOrientation] = useState<'portrait' | 'landscape'>('portrait');
+
+  // Filter categories by search
+  const filteredCategoryKeys = categoryKeys.filter((key) =>
+    key.toLowerCase().includes(searchQuery.toLowerCase())
+  );
+
+  const handlePrint = () => {
+    window.print();
+  };
+
+  /**
+   * Helper to chunk players for a category into fixed-size pages
+   * E.g., with rowsPerPage = 10, if there are 5 players, it returns 1 page with 5 players + 5 empty slots.
+   * If there are 14 players, it returns 2 pages (10 on page 1, 4 + 6 empty on page 2).
+   */
+  const getCategoryPages = (catPlayers: any[]) => {
+    const totalPages = Math.ceil(catPlayers.length / rowsPerPage) || 1;
+    return Array.from({ length: totalPages }, (_, pageIdx) => {
+      const start = pageIdx * rowsPerPage;
+      const pagePlayers = catPlayers.slice(start, start + rowsPerPage);
+      
+      // Fill remaining slots up to rowsPerPage with null
+      const filledSlots: (any | null)[] = [...pagePlayers];
+      while (filledSlots.length < rowsPerPage) {
+        filledSlots.push(null);
+      }
+      
+      return {
+        pageNumber: `${pageIdx + 1}/${totalPages}`,
+        poolName: totalPages > 1 ? `Pool ${pageIdx + 1}` : undefined,
+        startNumber: start + 1,
+        slots: filledSlots,
+      };
+    });
+  };
+
+  return (
+    <div className="space-y-6 p-4 sm:p-6 bg-slate-100/60 min-h-screen print:bg-white print:p-0 print:m-0 print:space-y-0">
+      
+      {/* ======================================================== */}
+      {/* CONTROL & ACTION HEADER (Print Hidden)                   */}
+      {/* ======================================================== */}
+      <div className="bg-white border border-slate-200 rounded-2xl p-6 shadow-sm print:hidden space-y-6">
+        
+        {/* Top Row: Title, Stats & Primary Buttons */}
+        <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4 border-b border-slate-100 pb-5">
+          <div className="space-y-1">
+            <div className="flex items-center gap-3">
+              <div className="p-2.5 bg-orange-600 text-white rounded-xl shadow-md shadow-orange-200">
+                <Trophy size={22} />
+              </div>
+              <div>
+                <h2 className="text-2xl font-black text-slate-900 tracking-tight flex items-center gap-2">
+                  Kata Scoring Sheets
+                </h2>
+                <p className="text-slate-500 text-xs sm:text-sm font-medium">
+                  5-Judge score sheets with fixed {rowsPerPage} rows per page, automated totals & podium awards.
+                </p>
               </div>
             </div>
-
-            {/* Modern Table Layout */}
-            <div className="p-6 print:p-0">
-              <table className="w-full border-collapse border-2 border-slate-900">
-                <thead>
-                  <tr className="bg-slate-900 text-white print:bg-slate-100 print:text-black">
-                    <th className="border-2 border-slate-900 p-4 text-left font-black uppercase text-[10px] tracking-widest w-1/4">Player Name</th>
-                    <th className="border-2 border-slate-900 p-4 text-left font-black uppercase text-[10px] tracking-widest w-1/4">Club / Association</th>
-                    {[1, 2, 3, 4, 5].map(j => (
-                      <th key={j} className="border-2 border-slate-900 p-2 w-14 text-center font-black text-[10px]">J{j}</th>
-                    ))}
-                    <th className="border-2 border-slate-900 p-2 w-24 text-center font-black text-[10px]">TOTAL</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {groupedData[groupKey].map((p: any, i: number) => (
-                    <tr key={i} className="h-20 hover:bg-slate-50 transition-colors">
-                      <td className="border-2 border-slate-900 p-4">
-                        <div className="flex items-center gap-3">
-                          <div className="bg-slate-100 p-2 rounded-lg print:hidden">
-                            <User size={14} className="text-slate-400" />
-                          </div>
-                          <span className="font-bold text-slate-900 uppercase text-sm">{p.name}</span>
-                        </div>
-                      </td>
-                      <td className="border-2 border-slate-900 p-4 text-xs font-semibold text-slate-600 uppercase italic">
-                        {p.club}
-                      </td>
-                      {[1, 2, 3, 4, 5].map(j => (
-                        <td key={j} className="border-2 border-slate-900"></td>
-                      ))}
-                      <td className="border-2 border-slate-900 bg-slate-50/50"></td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-
-            {/* Signature Footer - Matches Kumite Style */}
-            <div className="mt-16 pb-12 hidden print:flex justify-around px-10">
-               <div className="text-center w-64 border-t-2 border-black pt-3">
-                 <p className="font-black uppercase text-[10px] tracking-tighter">Chief Referee</p>
-               </div>
-               <div className="text-center w-64 border-t-2 border-black pt-3">
-                 <p className="font-black uppercase text-[10px] tracking-tighter">Technical Steward</p>
-               </div>
-            </div>
-
-            <style jsx>{`
-              @media print {
-                .page-break { 
-                  page-break-after: always;
-                  clear: both;
-                  padding-top: 2rem;
-                }
-                body { background: white !important; }
-              }
-            `}</style>
           </div>
-        ))
+
+          <div className="flex flex-wrap items-center gap-2.5">
+            {/* Fixed Rows Per Page Selector */}
+            <div className="flex items-center bg-slate-100 p-1 rounded-xl text-xs font-bold border border-slate-200">
+              <span className="text-slate-500 px-2 flex items-center gap-1">
+                <ListOrdered size={14} /> Fixed Rows:
+              </span>
+              {[8, 10, 12, 16].map((count) => (
+                <button
+                  key={count}
+                  onClick={() => setRowsPerPage(count)}
+                  className={`px-2.5 py-1 rounded-lg transition-all cursor-pointer ${
+                    rowsPerPage === count
+                      ? 'bg-slate-900 text-white shadow-xs'
+                      : 'text-slate-600 hover:text-black hover:bg-white/60'
+                  }`}
+                  title={`${count} fixed player rows per page`}
+                >
+                  {count}
+                </button>
+              ))}
+            </div>
+
+            {/* Print Orientation Selector */}
+            <div className="flex items-center bg-slate-100 p-1 rounded-xl text-xs font-bold border border-slate-200">
+              <span className="text-slate-500 px-2 flex items-center gap-1">
+                Print:
+              </span>
+              <button
+                onClick={() => setPrintOrientation('portrait')}
+                className={`px-2.5 py-1 rounded-lg transition-all cursor-pointer ${
+                  printOrientation === 'portrait'
+                    ? 'bg-slate-900 text-white shadow-xs'
+                    : 'text-slate-600 hover:text-black hover:bg-white/60'
+                }`}
+                title="Print in Portrait orientation"
+              >
+                Portrait
+              </button>
+              <button
+                onClick={() => setPrintOrientation('landscape')}
+                className={`px-2.5 py-1 rounded-lg transition-all cursor-pointer ${
+                  printOrientation === 'landscape'
+                    ? 'bg-slate-900 text-white shadow-xs'
+                    : 'text-slate-600 hover:text-black hover:bg-white/60'
+                }`}
+                title="Print in Landscape orientation"
+              >
+                Landscape
+              </button>
+            </div>
+
+            {/* Blank Sheet Mode Toggle */}
+            <button
+              onClick={() => setIsBlankMode(!isBlankMode)}
+              className={`flex items-center gap-2 px-3.5 py-2 rounded-xl text-xs font-bold border transition-all cursor-pointer ${
+                isBlankMode
+                  ? 'bg-amber-50 text-amber-800 border-amber-300'
+                  : 'bg-white text-slate-700 border-slate-200 hover:bg-slate-50'
+              }`}
+              title="Toggle blank sheet mode for hand-written referee scoring"
+            >
+              {isBlankMode ? <CheckSquare size={16} className="text-amber-600" /> : <Square size={16} className="text-slate-400" />}
+              <span>Blank Referee Sheet</span>
+            </button>
+
+            {/* View Mode Toggle */}
+            <button
+              onClick={() => setViewAll(!viewAll)}
+              className="flex items-center gap-2 px-3.5 py-2 rounded-xl text-xs font-bold bg-white text-slate-700 border border-slate-200 hover:bg-slate-50 transition-all cursor-pointer"
+            >
+              {viewAll ? <Layers size={16} className="text-orange-600" /> : <LayoutGrid size={16} className="text-orange-600" />}
+              <span>{viewAll ? "Show Single Category" : "Show All Categories"}</span>
+            </button>
+
+            {/* Print Button */}
+            <button
+              onClick={handlePrint}
+              className="bg-slate-900 hover:bg-black text-white px-5 py-2 rounded-xl text-xs font-black flex items-center gap-2 shadow-md shadow-slate-300 transition-all active:scale-95 cursor-pointer"
+            >
+              <Printer size={16} />
+              {viewAll ? "Print All Sheets" : "Print Current Sheet"}
+            </button>
+          </div>
+        </div>
+
+        {/* Second Row: Tournament Customization Inputs & Search */}
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-4 text-xs">
+          {/* Championship Title Input */}
+          <div className="space-y-1">
+            <label className="font-bold text-slate-500 uppercase tracking-wider flex items-center gap-1.5">
+              <Edit3 size={13} className="text-slate-400" /> Championship Name
+            </label>
+            <input
+              type="text"
+              value={championshipTitle}
+              onChange={(e) => setChampionshipTitle(e.target.value)}
+              placeholder="e.g. COIMBATORE DISTRICT KARATE CHAMPIONSHIP 2025"
+              className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg font-bold text-slate-800 focus:outline-blue-500"
+            />
+          </div>
+
+          {/* Tatami / Ring Selection */}
+          <div className="space-y-1">
+            <label className="font-bold text-slate-500 uppercase tracking-wider flex items-center gap-1.5">
+              <Flame size={13} className="text-slate-400" /> Tatami / Ring No
+            </label>
+            <input
+              type="text"
+              value={tatamiNumber}
+              onChange={(e) => setTatamiNumber(e.target.value)}
+              placeholder="e.g. Tatami 1"
+              className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg font-bold text-slate-800 focus:outline-blue-500"
+            />
+          </div>
+
+          {/* Search Category */}
+          <div className="space-y-1">
+            <label className="font-bold text-slate-500 uppercase tracking-wider flex items-center gap-1.5">
+              <Search size={13} className="text-slate-400" /> Filter Categories
+            </label>
+            <div className="relative">
+              <input
+                type="text"
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                placeholder="Search age, grade, gender..."
+                className="w-full pl-8 pr-3 py-2 bg-slate-50 border border-slate-200 rounded-lg font-medium text-slate-800 focus:outline-blue-500"
+              />
+              <Search size={14} className="absolute left-2.5 top-2.5 text-slate-400" />
+            </div>
+          </div>
+        </div>
+
+        {/* Category Pills Navigation */}
+        {!viewAll && filteredCategoryKeys.length > 0 && (
+          <div className="pt-2 border-t border-slate-100 space-y-2">
+            <div className="flex items-center justify-between text-xs text-slate-500 font-semibold">
+              <span>Select Category to View / Manage ({filteredCategoryKeys.length} available):</span>
+              <span>Total Kata Competitors: <strong className="text-slate-900">{kataPlayers.length}</strong></span>
+            </div>
+            <div className="flex flex-wrap gap-2 max-h-36 overflow-y-auto pr-1">
+              {filteredCategoryKeys.map((key) => {
+                const isSelected = selectedCategory === key;
+                const count = groupedData[key]?.length || 0;
+                return (
+                  <button
+                    key={key}
+                    onClick={() => setSelectedCategory(key)}
+                    className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all cursor-pointer flex items-center gap-2 border ${
+                      isSelected
+                        ? 'bg-slate-900 text-white border-slate-900 shadow-sm'
+                        : 'bg-white text-slate-600 border-slate-200 hover:bg-slate-50 hover:border-slate-300'
+                    }`}
+                  >
+                    <span>{key}</span>
+                    <span className={`text-[10px] px-1.5 py-0.5 rounded-md ${
+                      isSelected ? 'bg-white/20 text-white' : 'bg-slate-100 text-slate-500'
+                    }`}>
+                      {count}
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        )}
+      </div>
+
+      {/* ======================================================== */}
+      {/* KATA OFFICIAL SCORE SHEETS RENDERING                     */}
+      {/* ======================================================== */}
+      {filteredCategoryKeys.length > 0 ? (
+        viewAll ? (
+          // Render All Categories with pagination (ideal for batch printing)
+          filteredCategoryKeys.map((groupKey) => {
+            const pages = getCategoryPages(groupedData[groupKey]);
+            return pages.map((page, pIdx) => (
+              <KataDrawSheet
+                key={`${groupKey}_page_${pIdx}`}
+                groupKey={groupKey}
+                players={page.slots}
+                startNumber={page.startNumber}
+                championshipTitle={championshipTitle}
+                tatamiNumber={tatamiNumber}
+                pageNumber={page.pageNumber}
+                poolName={page.poolName}
+                isBlankMode={isBlankMode}
+                printOrientation={printOrientation}
+              />
+            ));
+          })
+        ) : (
+          // Render Single Selected Category (with its paginated sheets)
+          selectedCategory && groupedData[selectedCategory] ? (
+            (() => {
+              const pages = getCategoryPages(groupedData[selectedCategory]);
+              return pages.map((page, pIdx) => (
+                <KataDrawSheet
+                  key={`${selectedCategory}_page_${pIdx}`}
+                  groupKey={selectedCategory}
+                  players={page.slots}
+                  startNumber={page.startNumber}
+                  championshipTitle={championshipTitle}
+                  tatamiNumber={tatamiNumber}
+                  pageNumber={page.pageNumber}
+                  poolName={page.poolName}
+                  isBlankMode={isBlankMode}
+                  printOrientation={printOrientation}
+                />
+              ));
+            })()
+          ) : (
+            <div className="text-center py-16 bg-white rounded-2xl border border-slate-200">
+              <p className="text-slate-500 font-bold">Please select a category from above.</p>
+            </div>
+          )
+        )
       ) : (
-        <div className="flex flex-col items-center justify-center py-20 bg-white rounded-3xl border-2 border-dashed border-slate-200">
-          <div className="bg-slate-50 p-4 rounded-full mb-4">
-            <Trophy size={40} className="text-slate-300" />
-          </div>
-          <p className="text-slate-500 font-bold">No Kata data found in the current sheet.</p>
+        <div className="flex flex-col items-center justify-center py-20 bg-white rounded-2xl border-2 border-dashed border-slate-200">
+          <Users size={48} className="text-slate-300 mb-3" />
+          <h3 className="text-lg font-bold text-slate-700">No Kata Players Found</h3>
+          <p className="text-slate-400 text-sm mt-1">Please ensure your Excel file contains entries with Event Type = "Kata".</p>
         </div>
       )}
     </div>
