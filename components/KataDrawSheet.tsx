@@ -3,6 +3,7 @@ import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { RotateCcw, SlidersHorizontal } from 'lucide-react';
 import { ManualKataEditorModal } from './ManualKataEditorModal';
 import { ConfirmationModal } from './ConfirmationModal';
+import { OFFICIAL_KATA_LIST } from '../lib/kata-list';
 
 /**
  * Auto-format Kata scores:
@@ -187,6 +188,11 @@ export const KataDrawSheet: React.FC<KataDrawSheetProps> = ({
   const categoryName = parts[0] || 'Open';
   const ageGroup = parts[1] || 'All Ages';
   const gender = parts[2] || 'All';
+
+  // Unique datalist ID for official Kata suggestions
+  const kataDatalistId = useMemo(() => {
+    return `kata-list-${groupKey.replace(/[^a-zA-Z0-9]/g, '_')}-${pageNumber.replace(/[^a-zA-Z0-9]/g, '_')}`;
+  }, [groupKey, pageNumber]);
 
   // Local state for sheet competitor rows (allows manual reorder, swap, and assignment)
   const [sheetPlayers, setSheetPlayers] = useState<(Player | null)[]>(players);
@@ -547,13 +553,15 @@ export const KataDrawSheet: React.FC<KataDrawSheetProps> = ({
                     )}
                   </td>
 
-                  {/* Kata Name Input */}
+                  {/* Kata Name Input with Autocomplete Suggestions */}
                   <td className="border-2 border-slate-900 px-1 py-1 overflow-hidden">
                     {isBlankMode ? (
                       <div className="h-5"></div>
                     ) : (
                       <input
                         type="text"
+                        list={kataDatalistId}
+                        autoComplete="off"
                         placeholder={isAssigned ? "e.g. Bassai Dai" : "—"}
                         value={currentData.kata}
                         onChange={(e) => handleKataNameChange(idx, e.target.value)}
@@ -721,6 +729,13 @@ export const KataDrawSheet: React.FC<KataDrawSheetProps> = ({
         onConfirm={confirmModal.onConfirm}
         onCancel={() => setConfirmModal((prev) => ({ ...prev, isOpen: false }))}
       />
+
+      {/* Official WKF 102 Kata Autocomplete Datalist */}
+      <datalist id={kataDatalistId}>
+        {OFFICIAL_KATA_LIST.map((kataName) => (
+          <option key={kataName} value={kataName} />
+        ))}
+      </datalist>
     </div>
   );
 };
