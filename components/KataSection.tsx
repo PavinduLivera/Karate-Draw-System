@@ -1,5 +1,5 @@
 "use client";
-import React, { useState } from 'react';
+import React, { useState, useMemo } from 'react';
 import { 
   Printer, 
   Trophy, 
@@ -20,17 +20,19 @@ interface KataSectionProps {
 }
 
 const KataSection: React.FC<KataSectionProps> = ({ data }) => {
-  const kataPlayers = data.filter((p) => p.eventType === 'Kata');
+  const kataPlayers = useMemo(() => data.filter((p) => p.eventType === 'Kata'), [data]);
 
   // Group players by unique category key (Category | Age Group | Gender)
-  const groupedData = kataPlayers.reduce((groups: Record<string, any[]>, player) => {
-    const key = `${player.category} | ${player.ageGroup} | ${player.gender}`;
-    if (!groups[key]) groups[key] = [];
-    groups[key].push(player);
-    return groups;
-  }, {});
+  const groupedData = useMemo(() => {
+    return kataPlayers.reduce((groups: Record<string, any[]>, player) => {
+      const key = `${player.category} | ${player.ageGroup} | ${player.gender}`;
+      if (!groups[key]) groups[key] = [];
+      groups[key].push(player);
+      return groups;
+    }, {});
+  }, [kataPlayers]);
 
-  const categoryKeys = Object.keys(groupedData);
+  const categoryKeys = useMemo(() => Object.keys(groupedData), [groupedData]);
 
   // Championship title from data or default
   const defaultChampionship = kataPlayers[0]?.championship || "COIMBATORE DISTRICT KARATE CHAMPIONSHIP 2025";
@@ -48,39 +50,54 @@ const KataSection: React.FC<KataSectionProps> = ({ data }) => {
   const [printOrientation, setPrintOrientation] = useState<'portrait' | 'landscape'>('portrait');
 
   // Filter categories by search
-  const filteredCategoryKeys = categoryKeys.filter((key) =>
-    key.toLowerCase().includes(searchQuery.toLowerCase())
-  );
+  const filteredCategoryKeys = useMemo(() => {
+    return categoryKeys.filter((key) =>
+      key.toLowerCase().includes(searchQuery.toLowerCase())
+    );
+  }, [categoryKeys, searchQuery]);
 
   const handlePrint = () => {
     window.print();
   };
 
   /**
-   * Helper to chunk players for a category into fixed-size pages
-   * E.g., with rowsPerPage = 10, if there are 5 players, it returns 1 page with 5 players + 5 empty slots.
-   * If there are 14 players, it returns 2 pages (10 on page 1, 4 + 6 empty on page 2).
+   * Memoized chunking of players for categories into fixed-size pages.
+   * Preserves exact page/slots object references across printOrientation toggles!
    */
-  const getCategoryPages = (catPlayers: any[]) => {
-    const totalPages = Math.ceil(catPlayers.length / rowsPerPage) || 1;
-    return Array.from({ length: totalPages }, (_, pageIdx) => {
-      const start = pageIdx * rowsPerPage;
-      const pagePlayers = catPlayers.slice(start, start + rowsPerPage);
-      
-      // Fill remaining slots up to rowsPerPage with null
-      const filledSlots: (any | null)[] = [...pagePlayers];
-      while (filledSlots.length < rowsPerPage) {
-        filledSlots.push(null);
-      }
-      
-      return {
-        pageNumber: `${pageIdx + 1}/${totalPages}`,
-        poolName: totalPages > 1 ? `Pool ${pageIdx + 1}` : undefined,
-        startNumber: start + 1,
-        slots: filledSlots,
-      };
+  const categoryPagesMap = useMemo(() => {
+    const map: Record<
+      string,
+      Array<{
+        pageNumber: string;
+        poolName: string | undefined;
+        startNumber: number;
+        slots: (any | null)[];
+      }>
+    > = {};
+
+    categoryKeys.forEach((key) => {
+      const catPlayers = groupedData[key] || [];
+      const totalPages = Math.ceil(catPlayers.length / rowsPerPage) || 1;
+      map[key] = Array.from({ length: totalPages }, (_, pageIdx) => {
+        const start = pageIdx * rowsPerPage;
+        const pagePlayers = catPlayers.slice(start, start + rowsPerPage);
+
+        const filledSlots: (any | null)[] = [...pagePlayers];
+        while (filledSlots.length < rowsPerPage) {
+          filledSlots.push(null);
+        }
+
+        return {
+          pageNumber: `${pageIdx + 1}/${totalPages}`,
+          poolName: totalPages > 1 ? `Pool ${pageIdx + 1}` : undefined,
+          startNumber: start + 1,
+          slots: filledSlots,
+        };
+      });
     });
-  };
+
+    return map;
+  }, [categoryKeys, groupedData, rowsPerPage]);
 
   return (
     <div className="space-y-6 p-4 sm:p-6 bg-slate-100/60 min-h-screen print:bg-white print:p-0 print:m-0 print:space-y-0">
@@ -102,7 +119,7 @@ const KataSection: React.FC<KataSectionProps> = ({ data }) => {
                   Kata Scoring Sheets
                 </h2>
                 <p className="text-slate-500 text-xs sm:text-sm font-medium">
-                  5-Judge score sheets with fixed {rowsPerPage} rows per page, automated totals & podium awards.
+                  5-Judge scoring (drops lowest & highest) & 3-Judge scoring with automated totals & podium awards.
                 </p>
               </div>
             </div>
@@ -283,7 +300,7 @@ const KataSection: React.FC<KataSectionProps> = ({ data }) => {
         viewAll ? (
           // Render All Categories with pagination (ideal for batch printing)
           filteredCategoryKeys.map((groupKey) => {
-            const pages = getCategoryPages(groupedData[groupKey]);
+            const pages = categoryPagesMap[groupKey] || [];
             return pages.map((page, pIdx) => (
               <KataDrawSheet
                 key={`${groupKey}_page_${pIdx}`}
@@ -296,29 +313,28 @@ const KataSection: React.FC<KataSectionProps> = ({ data }) => {
                 poolName={page.poolName}
                 isBlankMode={isBlankMode}
                 printOrientation={printOrientation}
+                categoryPlayers={groupedData[groupKey]}
               />
             ));
           })
         ) : (
           // Render Single Selected Category (with its paginated sheets)
-          selectedCategory && groupedData[selectedCategory] ? (
-            (() => {
-              const pages = getCategoryPages(groupedData[selectedCategory]);
-              return pages.map((page, pIdx) => (
-                <KataDrawSheet
-                  key={`${selectedCategory}_page_${pIdx}`}
-                  groupKey={selectedCategory}
-                  players={page.slots}
-                  startNumber={page.startNumber}
-                  championshipTitle={championshipTitle}
-                  tatamiNumber={tatamiNumber}
-                  pageNumber={page.pageNumber}
-                  poolName={page.poolName}
-                  isBlankMode={isBlankMode}
-                  printOrientation={printOrientation}
-                />
-              ));
-            })()
+          selectedCategory && categoryPagesMap[selectedCategory] ? (
+            categoryPagesMap[selectedCategory].map((page, pIdx) => (
+              <KataDrawSheet
+                key={`${selectedCategory}_page_${pIdx}`}
+                groupKey={selectedCategory}
+                players={page.slots}
+                startNumber={page.startNumber}
+                championshipTitle={championshipTitle}
+                tatamiNumber={tatamiNumber}
+                pageNumber={page.pageNumber}
+                poolName={page.poolName}
+                isBlankMode={isBlankMode}
+                printOrientation={printOrientation}
+                categoryPlayers={groupedData[selectedCategory]}
+              />
+            ))
           ) : (
             <div className="text-center py-16 bg-white rounded-2xl border border-slate-200">
               <p className="text-slate-500 font-bold">Please select a category from above.</p>

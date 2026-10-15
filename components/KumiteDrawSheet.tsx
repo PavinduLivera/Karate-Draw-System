@@ -1,7 +1,9 @@
 "use client";
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { Player, DrawSlot, generateKumiteDrawSlots } from '@/lib/tournament-logic';
-import { Trophy, Award, CheckCircle2, RotateCcw } from 'lucide-react';
+import { Trophy, Award, CheckCircle2, RotateCcw, SlidersHorizontal } from 'lucide-react';
+import { ManualDrawEditorModal } from './ManualDrawEditorModal';
+import { ConfirmationModal } from './ConfirmationModal';
 
 interface KumiteDrawSheetProps {
   groupKey: string;
@@ -33,6 +35,8 @@ export const KumiteDrawSheet: React.FC<KumiteDrawSheetProps> = ({
 
   const size = forcedSize; // default 16
   const [slots, setSlots] = useState<DrawSlot[]>([]);
+  const [isEditModalOpen, setIsEditModalOpen] = useState(false);
+  const [isCustomized, setIsCustomized] = useState(false);
 
   // Bracket match winner states
   // Round 1 -> Round 2 winners (8 for 16-draw, 4 for 8-draw)
@@ -50,14 +54,26 @@ export const KumiteDrawSheet: React.FC<KumiteDrawSheetProps> = ({
   // Scores map: key = `r{round}_m{match}`, value = { aka: string, ao: string }
   const [scores, setScores] = useState<Record<string, { aka: string; ao: string }>>({});
 
-  // Initialize slots
-  useEffect(() => {
-    const generated = generateKumiteDrawSlots(players, size);
-    setSlots(generated);
+  // Confirmation modal state for safe match winner & draw changes
+  const [confirmModal, setConfirmModal] = useState<{
+    isOpen: boolean;
+    title: string;
+    message: string;
+    details?: string;
+    confirmText?: string;
+    variant?: 'danger' | 'warning' | 'info';
+    onConfirm: () => void;
+  }>({
+    isOpen: false,
+    title: '',
+    message: '',
+    onConfirm: () => {},
+  });
 
+  // Helper to compute initial state with auto-advanced uncontested byes
+  const computeInitialDrawState = (generated: DrawSlot[]) => {
     // Initial round 2 slots (8 for 16-draw, 4 for 8-draw)
     const initialR2: (Player | null)[] = Array(size / 2).fill(null);
-    // Auto-advance byes in round 1
     for (let i = 0; i < size / 2; i++) {
       const pAka = generated[i * 2]?.player;
       const isAkaBye = generated[i * 2]?.isBye;
@@ -70,31 +86,93 @@ export const KumiteDrawSheet: React.FC<KumiteDrawSheetProps> = ({
         initialR2[i] = pAo;
       }
     }
-    setR2Slots(initialR2);
-    setR3Slots(Array(size / 4).fill(null));
-    setR4Slots(Array(size / 8).fill(null));
-    setChampion(null);
-    setRunnerUp(null);
-    setBronze1(null);
-    setBronze2(null);
-    setScores({});
-  }, [players, size]);
 
-  const handleReset = () => {
+    // Auto-advance uncontested byes to Round 3 (Semi-Finals)
+    const initialR3: (Player | null)[] = Array(size / 4).fill(null);
+    for (let i = 0; i < size / 4; i++) {
+      const pTop = initialR2[i * 2];
+      const pBot = initialR2[i * 2 + 1];
+      const matchTopEmpty = !generated[i * 4]?.player && !generated[i * 4 + 1]?.player;
+      const matchBotEmpty = !generated[i * 4 + 2]?.player && !generated[i * 4 + 3]?.player;
+
+      if (pTop && matchBotEmpty) {
+        initialR3[i] = pTop;
+      } else if (pBot && matchTopEmpty) {
+        initialR3[i] = pBot;
+      }
+    }
+
+    // Auto-advance uncontested byes to Round 4 (Grand Finals)
+    const initialR4: (Player | null)[] = Array(size / 8).fill(null);
+    for (let i = 0; i < size / 8; i++) {
+      const pTop = initialR3[i * 2];
+      const pBot = initialR3[i * 2 + 1];
+      const qTopEmpty = [0, 1, 2, 3].every((idx) => !generated[i * 8 + idx]?.player);
+      const qBotEmpty = [4, 5, 6, 7].every((idx) => !generated[i * 8 + idx]?.player);
+
+      if (pTop && qBotEmpty) {
+        initialR4[i] = pTop;
+      } else if (pBot && qTopEmpty) {
+        initialR4[i] = pBot;
+      }
+    }
+
+    return { initialR2, initialR3, initialR4 };
+  };
+
+  // Stable key of players in this category: only changes when actual athletes change, NOT when orientation changes!
+  const playersHash = useMemo(() => {
+    return players
+      .map((p) => `${p.name}:::${p.club || ''}`)
+      .join('|');
+  }, [players]);
+
+  const prevPlayersHashRef = useRef<string | null>(null);
+
+  // Initialize slots only when actual players or bracket size change
+  useEffect(() => {
+    const key = `${playersHash}_size${size}`;
+    if (prevPlayersHashRef.current !== key) {
+      prevPlayersHashRef.current = key;
+      const generated = generateKumiteDrawSlots(players, size);
+      setSlots(generated);
+      setIsCustomized(false);
+
+      const { initialR2, initialR3, initialR4 } = computeInitialDrawState(generated);
+      setR2Slots(initialR2);
+      setR3Slots(initialR3);
+      setR4Slots(initialR4);
+      setChampion(null);
+      setRunnerUp(null);
+      setBronze1(null);
+      setBronze2(null);
+      setScores({});
+    }
+  }, [playersHash, size, players]);
+
+  // Detect if any ongoing match progress exists in this category
+  const hasMatchProgress = () => {
+    if (champion !== null || runnerUp !== null || bronze1 !== null || bronze2 !== null) return true;
+    for (let i = 0; i < size / 2; i++) {
+      const pAka = slots[i * 2]?.player;
+      const pAo = slots[i * 2 + 1]?.player;
+      const winner = r2Slots[i];
+      if (pAka && pAo && winner) return true;
+    }
+    if (r3Slots.some((p) => p !== null)) return true;
+    if (r4Slots.some((p) => p !== null)) return true;
+    return false;
+  };
+
+  const executeReset = () => {
     const generated = generateKumiteDrawSlots(players, size);
     setSlots(generated);
-    const initialR2: (Player | null)[] = Array(size / 2).fill(null);
-    for (let i = 0; i < size / 2; i++) {
-      const pAka = generated[i * 2]?.player;
-      const isAkaBye = generated[i * 2]?.isBye;
-      const pAo = generated[i * 2 + 1]?.player;
-      const isAoBye = generated[i * 2 + 1]?.isBye;
-      if (pAka && isAoBye) initialR2[i] = pAka;
-      else if (pAo && isAkaBye) initialR2[i] = pAo;
-    }
+    setIsCustomized(false);
+
+    const { initialR2, initialR3, initialR4 } = computeInitialDrawState(generated);
     setR2Slots(initialR2);
-    setR3Slots(Array(size / 4).fill(null));
-    setR4Slots(Array(size / 8).fill(null));
+    setR3Slots(initialR3);
+    setR4Slots(initialR4);
     setChampion(null);
     setRunnerUp(null);
     setBronze1(null);
@@ -102,23 +180,131 @@ export const KumiteDrawSheet: React.FC<KumiteDrawSheetProps> = ({
     setScores({});
   };
 
-  // Winner selection handlers
-  const handleSelectR1Winner = (matchIdx: number, winnerPlayer: Player | null) => {
-    if (!winnerPlayer || isBlankMode) return;
+  const handleReset = () => {
+    if (hasMatchProgress()) {
+      setConfirmModal({
+        isOpen: true,
+        title: 'Reset Tournament Bracket?',
+        message: 'Match winners and progression have already been recorded for this category.',
+        details: 'Resetting the draw will clear all selected match winners, semi-finalists, finalists, and podium medals.',
+        confirmText: 'Yes, Reset Bracket',
+        variant: 'danger',
+        onConfirm: () => {
+          executeReset();
+          setConfirmModal((prev) => ({ ...prev, isOpen: false }));
+        },
+      });
+      return;
+    }
+    executeReset();
+  };
+
+  const executeApplyManualDraw = (newSlots: DrawSlot[]) => {
+    setSlots(newSlots);
+    setIsCustomized(true);
+
+    const { initialR2, initialR3, initialR4 } = computeInitialDrawState(newSlots);
+    setR2Slots(initialR2);
+    setR3Slots(initialR3);
+    setR4Slots(initialR4);
+    setChampion(null);
+    setRunnerUp(null);
+    setBronze1(null);
+    setBronze2(null);
+    setScores({});
+  };
+
+  const handleApplyManualDraw = (newSlots: DrawSlot[]) => {
+    if (hasMatchProgress()) {
+      setConfirmModal({
+        isOpen: true,
+        title: 'Apply Draw Slot Changes?',
+        message: 'Match winners have already been recorded for this category.',
+        details: 'Applying new slot assignments will reset existing match progression and re-advance uncontested BYEs.',
+        confirmText: 'Apply & Reset Results',
+        variant: 'warning',
+        onConfirm: () => {
+          executeApplyManualDraw(newSlots);
+          setConfirmModal((prev) => ({ ...prev, isOpen: false }));
+        },
+      });
+      return;
+    }
+    executeApplyManualDraw(newSlots);
+  };
+
+  // Helper to safely clear downstream references if a previous winner is changed
+  const clearDownstream = (oldPlayerName: string) => {
+    setR3Slots((prev) => prev.map((p) => (p && p.name === oldPlayerName ? null : p)));
+    setR4Slots((prev) => prev.map((p) => (p && p.name === oldPlayerName ? null : p)));
+    setChampion((prev) => (prev && prev.name === oldPlayerName ? null : prev));
+    setRunnerUp((prev) => (prev && prev.name === oldPlayerName ? null : prev));
+    setBronze1((prev) => (prev && prev.name === oldPlayerName ? null : prev));
+    setBronze2((prev) => (prev && prev.name === oldPlayerName ? null : prev));
+  };
+
+  // Winner selection handlers with change confirmations
+  const applyR1Winner = (matchIdx: number, winnerPlayer: Player, oldWinner?: Player | null) => {
     const nextR2 = [...r2Slots];
     nextR2[matchIdx] = winnerPlayer;
     setR2Slots(nextR2);
+    if (oldWinner && oldWinner.name !== winnerPlayer.name) {
+      clearDownstream(oldWinner.name);
+    }
+  };
+
+  const handleSelectR1Winner = (matchIdx: number, winnerPlayer: Player | null) => {
+    if (!winnerPlayer || isBlankMode) return;
+    const currentWinner = r2Slots[matchIdx];
+    if (currentWinner && currentWinner.name !== winnerPlayer.name) {
+      setConfirmModal({
+        isOpen: true,
+        title: 'Change Round 1 Winner?',
+        message: `Match ${matchIdx + 1} already has "${currentWinner.name}" recorded as the winner. Are you sure you want to change the winner to "${winnerPlayer.name}"?`,
+        details: 'Changing this winner will update subsequent rounds and clear any later matches played by the previous winner.',
+        confirmText: 'Change Winner',
+        variant: 'warning',
+        onConfirm: () => {
+          applyR1Winner(matchIdx, winnerPlayer, currentWinner);
+          setConfirmModal((prev) => ({ ...prev, isOpen: false }));
+        },
+      });
+      return;
+    }
+    applyR1Winner(matchIdx, winnerPlayer);
+  };
+
+  const applyR2Winner = (matchIdx: number, winnerPlayer: Player, oldWinner?: Player | null) => {
+    const nextR3 = [...r3Slots];
+    nextR3[matchIdx] = winnerPlayer;
+    setR3Slots(nextR3);
+    if (oldWinner && oldWinner.name !== winnerPlayer.name) {
+      clearDownstream(oldWinner.name);
+    }
   };
 
   const handleSelectR2Winner = (matchIdx: number, winnerPlayer: Player | null) => {
     if (!winnerPlayer || isBlankMode) return;
-    const nextR3 = [...r3Slots];
-    nextR3[matchIdx] = winnerPlayer;
-    setR3Slots(nextR3);
+    const currentWinner = r3Slots[matchIdx];
+    if (currentWinner && currentWinner.name !== winnerPlayer.name) {
+      setConfirmModal({
+        isOpen: true,
+        title: 'Change Quarter-Final Winner?',
+        message: `Quarter-Final Match ${matchIdx + 1} already has "${currentWinner.name}" recorded as the winner. Do you want to change the winner to "${winnerPlayer.name}"?`,
+        details: 'Changing this winner will clear subsequent semi-final and final matches played by the previous winner.',
+        confirmText: 'Change Winner',
+        variant: 'warning',
+        onConfirm: () => {
+          applyR2Winner(matchIdx, winnerPlayer, currentWinner);
+          setConfirmModal((prev) => ({ ...prev, isOpen: false }));
+        },
+      });
+      return;
+    }
+    applyR2Winner(matchIdx, winnerPlayer);
   };
 
-  const handleSelectR3Winner = (matchIdx: number, winnerPlayer: Player | null) => {
-    if (!winnerPlayer || isBlankMode) return;
+  const applyR3Winner = (matchIdx: number, winnerPlayer: Player, oldWinner?: Player | null) => {
     const nextR4 = [...r4Slots];
     nextR4[matchIdx] = winnerPlayer;
     setR4Slots(nextR4);
@@ -129,15 +315,60 @@ export const KumiteDrawSheet: React.FC<KumiteDrawSheetProps> = ({
     const loser = p1?.name === winnerPlayer.name ? p2 : p1;
     if (matchIdx === 0) setBronze1(loser || null);
     if (matchIdx === 1) setBronze2(loser || null);
+
+    if (oldWinner && oldWinner.name !== winnerPlayer.name) {
+      setChampion((prev) => (prev && prev.name === oldWinner.name ? null : prev));
+      setRunnerUp((prev) => (prev && prev.name === oldWinner.name ? null : prev));
+    }
   };
 
-  const handleSelectFinalWinner = (winnerPlayer: Player | null) => {
+  const handleSelectR3Winner = (matchIdx: number, winnerPlayer: Player | null) => {
     if (!winnerPlayer || isBlankMode) return;
+    const currentWinner = r4Slots[matchIdx];
+    if (currentWinner && currentWinner.name !== winnerPlayer.name) {
+      setConfirmModal({
+        isOpen: true,
+        title: 'Change Semi-Final Winner?',
+        message: `Semi-Final Match ${matchIdx + 1} already has "${currentWinner.name}" advancing to Finals. Do you want to change the finalist to "${winnerPlayer.name}"?`,
+        details: 'This will update the Bronze medal and reset the Grand Final champion if already decided.',
+        confirmText: 'Change Finalist',
+        variant: 'warning',
+        onConfirm: () => {
+          applyR3Winner(matchIdx, winnerPlayer, currentWinner);
+          setConfirmModal((prev) => ({ ...prev, isOpen: false }));
+        },
+      });
+      return;
+    }
+    applyR3Winner(matchIdx, winnerPlayer);
+  };
+
+  const applyFinalWinner = (winnerPlayer: Player) => {
     setChampion(winnerPlayer);
     const finalist1 = r4Slots[0];
     const finalist2 = r4Slots[1];
     const runner = finalist1?.name === winnerPlayer.name ? finalist2 : finalist1;
     setRunnerUp(runner || null);
+  };
+
+  const handleSelectFinalWinner = (winnerPlayer: Player | null) => {
+    if (!winnerPlayer || isBlankMode) return;
+    if (champion && champion.name !== winnerPlayer.name) {
+      setConfirmModal({
+        isOpen: true,
+        title: 'Change 1st Place Champion?',
+        message: `"${champion.name}" is currently recorded as 1st Place Champion. Do you want to change the 1st Place Champion to "${winnerPlayer.name}"?`,
+        details: `"${winnerPlayer.name}" will become 1st Place, and "${champion.name}" will become 2nd Place Runner-Up.`,
+        confirmText: 'Change Champion',
+        variant: 'warning',
+        onConfirm: () => {
+          applyFinalWinner(winnerPlayer);
+          setConfirmModal((prev) => ({ ...prev, isOpen: false }));
+        },
+      });
+      return;
+    }
+    applyFinalWinner(winnerPlayer);
   };
 
   // Dimensions & Coordinates for 16-Draw
@@ -152,7 +383,7 @@ export const KumiteDrawSheet: React.FC<KumiteDrawSheetProps> = ({
   const col3W = 160;
   const col4X = 760; // Finals
   const col4W = 150;
-  const goldX = 950; // Champion box
+  const goldX = 945; // Champion box
 
   // Y-coordinates for 16 slots
   const r1SlotY = Array.from({ length: 16 }, (_, i) => 30 + i * 47);
@@ -204,13 +435,27 @@ export const KumiteDrawSheet: React.FC<KumiteDrawSheetProps> = ({
           <span className="font-bold text-slate-700 uppercase flex items-center gap-1.5">
             <span className="w-2.5 h-2.5 rounded-full bg-blue-500 inline-block"></span> AO (Blue)
           </span>
-          <span className="text-slate-400 pl-2">| Click any competitor to advance winner</span>
+          <span className="text-slate-400 pl-2">| Click competitor to advance winner</span>
+          {isCustomized && (
+            <span className="bg-blue-100 text-blue-800 text-[10px] px-2 py-0.5 rounded-full font-bold uppercase tracking-wider flex items-center gap-1">
+              <span className="w-1.5 h-1.5 rounded-full bg-blue-600"></span>
+              Custom Draw Active
+            </span>
+          )}
         </div>
         <div className="flex items-center gap-2">
           <button
+            onClick={() => setIsEditModalOpen(true)}
+            className="flex items-center gap-1.5 text-blue-700 hover:text-blue-900 font-bold px-3 py-1 bg-blue-50 hover:bg-blue-100 border border-blue-200 rounded-md shadow-xs transition-all cursor-pointer"
+            title="Manually customize, swap, or reassign draw slots"
+          >
+            <SlidersHorizontal size={13} />
+            Edit Draw (Manual)
+          </button>
+          <button
             onClick={handleReset}
             className="flex items-center gap-1 text-slate-600 hover:text-black font-semibold px-2.5 py-1 bg-white border border-slate-200 rounded shadow-xs hover:bg-slate-100 transition-all cursor-pointer"
-            title="Reset match winners to initial state"
+            title="Reset draw to initial algorithmic state"
           >
             <RotateCcw size={12} />
             Reset Draw
@@ -568,20 +813,83 @@ export const KumiteDrawSheet: React.FC<KumiteDrawSheetProps> = ({
                 {/* Horizontal line extending to Gold Box */}
                 <line x1={col4X + col4W + 20} y1={midY} x2={goldX} y2={midY} stroke="#0f172a" strokeWidth="2.5" />
 
-                {/* Gold Box at the end of Champion line (Exact match to photograph) */}
-                <rect
-                  x={goldX}
-                  y={midY - 14}
-                  width={28}
-                  height={28}
-                  rx={3}
-                  fill="url(#goldGrad)"
-                  stroke="#b45309"
-                  strokeWidth="2"
-                />
-                <text x={goldX + 14} y={midY + 5} textAnchor="middle" fontSize="14" fontWeight="900" fill="#78350f">
-                  1
-                </text>
+                {/* 1st Place / Champion Box in Kumite Draw */}
+                <g 
+                  className="cursor-pointer group"
+                  onClick={() => {
+                    if (isBlankMode) return;
+                    if (finalist1 && finalist2) {
+                      if (champion?.name === finalist1.name) handleSelectFinalWinner(finalist2);
+                      else handleSelectFinalWinner(finalist1);
+                    } else if (finalist1) {
+                      handleSelectFinalWinner(finalist1);
+                    } else if (finalist2) {
+                      handleSelectFinalWinner(finalist2);
+                    }
+                  }}
+                >
+                  {/* Outer Card Background */}
+                  <rect
+                    x={goldX}
+                    y={midY - 18}
+                    width={145}
+                    height={36}
+                    rx={3}
+                    fill={champion ? "#fffdf5" : "#ffffff"}
+                    stroke={champion ? "#b45309" : "#0f172a"}
+                    strokeWidth={champion ? "2" : "1.5"}
+                    strokeDasharray={champion ? undefined : "3 3"}
+                  />
+
+                  {/* Gold "1" Square inside the Card */}
+                  <rect
+                    x={goldX + 3}
+                    y={midY - 15}
+                    width={30}
+                    height={30}
+                    rx={2}
+                    fill="url(#goldGrad)"
+                    stroke="#b45309"
+                    strokeWidth="1.5"
+                  />
+                  <text
+                    x={goldX + 18}
+                    y={midY + 5}
+                    textAnchor="middle"
+                    fontSize="15"
+                    fontWeight="900"
+                    fill="#78350f"
+                    className="font-sans"
+                  >
+                    1
+                  </text>
+
+                  {/* 1st Place Champion Name & Club */}
+                  {champion && (
+                    <>
+                      <text
+                        x={goldX + 38}
+                        y={midY - 2}
+                        fontSize="10"
+                        fontWeight="900"
+                        fill="#0f172a"
+                        className="uppercase font-sans"
+                      >
+                        {champion.name.length > 16 ? champion.name.slice(0, 15) + '…' : champion.name}
+                      </text>
+                      <text
+                        x={goldX + 38}
+                        y={midY + 10}
+                        fontSize="8"
+                        fontWeight="700"
+                        fill="#b45309"
+                        className="uppercase font-sans italic"
+                      >
+                        {champion.club ? (champion.club.length > 18 ? champion.club.slice(0, 17) + '…' : champion.club) : 'CHAMPION'}
+                      </text>
+                    </>
+                  )}
+                </g>
               </g>
             );
           })()}
@@ -602,11 +910,28 @@ export const KumiteDrawSheet: React.FC<KumiteDrawSheetProps> = ({
             <line x1="0" y1="78" x2="200" y2="78" stroke="#000000" strokeWidth="1.2" />
 
             {/* Row 1: 1st */}
-            <rect x="0" y="0" width="42" height="26" fill="#f8fafc" />
-            <text x="21" y="17" textAnchor="middle" fontSize="11" fontWeight="900" fill="#000000" className="font-sans">1ˢᵗ</text>
-            <text x="50" y="17" fontSize="10" fontWeight="800" fill="#000000" className="uppercase font-sans">
-              {champion ? champion.name : ""}
-            </text>
+            <g
+              className="cursor-pointer group"
+              onClick={() => {
+                if (isBlankMode) return;
+                const f1 = r4Slots[0];
+                const f2 = r4Slots[1];
+                if (f1 && f2) {
+                  if (champion?.name === f1.name) handleSelectFinalWinner(f2);
+                  else handleSelectFinalWinner(f1);
+                } else if (f1) {
+                  handleSelectFinalWinner(f1);
+                } else if (f2) {
+                  handleSelectFinalWinner(f2);
+                }
+              }}
+            >
+              <rect x="0" y="0" width="42" height="26" fill={champion ? "#fef08a" : "#f8fafc"} />
+              <text x="21" y="17" textAnchor="middle" fontSize="11" fontWeight="900" fill="#000000" className="font-sans">1ˢᵗ</text>
+              <text x="50" y="17" fontSize="10" fontWeight="800" fill="#000000" className="uppercase font-sans">
+                {champion ? champion.name : ""}
+              </text>
+            </g>
 
             {/* Row 2: 2nd */}
             <rect x="0" y="26" width="42" height="26" fill="#f8fafc" />
@@ -650,6 +975,29 @@ export const KumiteDrawSheet: React.FC<KumiteDrawSheetProps> = ({
           margin: 5mm 6mm;
         }
       `}} />
+
+      {/* Manual Draw Editor Modal */}
+      <ManualDrawEditorModal
+        isOpen={isEditModalOpen}
+        onClose={() => setIsEditModalOpen(false)}
+        initialSlots={slots}
+        allPlayers={players}
+        categoryTitle={`KUMITE INDIVIDUAL ${categoryName} ${weightClass} (${gender})`}
+        size={size}
+        onApply={handleApplyManualDraw}
+      />
+
+      {/* Safety Confirmation Modal */}
+      <ConfirmationModal
+        isOpen={confirmModal.isOpen}
+        title={confirmModal.title}
+        message={confirmModal.message}
+        details={confirmModal.details}
+        confirmText={confirmModal.confirmText}
+        variant={confirmModal.variant}
+        onConfirm={confirmModal.onConfirm}
+        onCancel={() => setConfirmModal((prev) => ({ ...prev, isOpen: false }))}
+      />
     </div>
   );
 };

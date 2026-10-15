@@ -41,10 +41,33 @@ export const getBracketSize = (count: number): 8 | 16 => {
 };
 
 /**
+ * Helper to determine which tournament round two slots would meet
+ * 16-Bracket: 4 = Finals, 3 = Semi-Finals, 2 = Quarter-Finals, 1 = Round 1
+ * 8-Bracket:  3 = Finals, 2 = Semi-Finals, 1 = Round 1
+ */
+export const getMeetingRound = (s1: number, s2: number, size: 8 | 16): number => {
+  if (size === 16) {
+    if (Math.floor(s1 / 8) !== Math.floor(s2 / 8)) return 4; // Finals (Opposite halves)
+    if (Math.floor(s1 / 4) !== Math.floor(s2 / 4)) return 3; // Semi-Finals (Opposite quarters)
+    if (Math.floor(s1 / 2) !== Math.floor(s2 / 2)) return 2; // Quarter-Finals (Opposite matches)
+    return 1; // Round 1 (Same match)
+  } else {
+    if (Math.floor(s1 / 4) !== Math.floor(s2 / 4)) return 3; // Finals (Opposite halves)
+    if (Math.floor(s1 / 2) !== Math.floor(s2 / 2)) return 2; // Semi-Finals (Opposite matches)
+    return 1; // Round 1 (Same match)
+  }
+};
+
+/**
  * WKF Karate Standard Kumite Draw Generation
  * - Seed placement with opposite halves & quarters
- * - Club / Dojo separation to prevent club-mates meeting in early rounds
- * - Symmetric Bye placement
+ * - Club / Dojo separation:
+ *   * 2 competitors from same club -> Placed in opposite halves (Top & Bottom / Pool A & B)
+ *     so they can only meet in the Grand Final.
+ *   * 3 competitors from same club -> Placed in 3 separate quarters so they only meet
+ *     in the Semi-Finals & Grand Final, strictly avoiding Round 1 & Round 2 clashes.
+ *   * 4+ competitors -> Evenly distributed across quarters to meet as late as possible.
+ * - Symmetric Bye placement following WKF seeding priorities.
  */
 export const generateKumiteDrawSlots = (
   players: Player[], 
@@ -59,80 +82,191 @@ export const generateKumiteDrawSlots = (
   }));
 
   if (!players || players.length === 0) {
+    slots.forEach((s) => {
+      s.isBye = true;
+    });
     return slots;
   }
 
-  // Seeding order for 16-draw and 8-draw (WKF standard)
-  const seedSlots16 = [
-    0,  // Seed 1 (Match 1, Top)
-    15, // Seed 2 (Match 8, Bottom)
-    8,  // Seed 3 (Match 5, Bottom Pool Top)
-    7,  // Seed 4 (Match 4, Top Pool Bottom)
-    4,  // Seed 5 (Match 3)
-    11, // Seed 6 (Match 6)
-    12, // Seed 7 (Match 7)
-    3,  // Seed 8 (Match 2)
-    2,  // Seed 9
-    13, // Seed 10
-    10, // Seed 11
-    5,  // Seed 12
-    6,  // Seed 13
-    9,  // Seed 14
-    14, // Seed 15
-    1,  // Seed 16
-  ];
+  const numPlayers = Math.min(players.length, size);
+  const activePlayers = players.slice(0, numPlayers);
 
-  const seedSlots8 = [
-    0, // Seed 1
-    7, // Seed 2
-    4, // Seed 3
-    3, // Seed 4
-    2, // Seed 5
-    5, // Seed 6
-    6, // Seed 7
-    1, // Seed 8
-  ];
+  // WKF standard seed priority order
+  const seedSlots16 = [0, 15, 8, 7, 4, 11, 12, 3, 2, 13, 10, 5, 6, 9, 14, 1];
+  const seedSlots8 = [0, 7, 4, 3, 2, 5, 6, 1];
+  const preferredSlots = size === 8 ? seedSlots8 : seedSlots16;
 
-  const seedSlots = size === 8 ? seedSlots8 : seedSlots16;
-
-  // Club separation: Group players by club
-  const clubGroups: Record<string, Player[]> = {};
-  players.forEach((p) => {
-    const club = p.club || 'Independent';
-    if (!clubGroups[club]) clubGroups[club] = [];
-    clubGroups[club].push(p);
+  // Group players by normalized club name
+  const clubGroups = new Map<string, Player[]>();
+  activePlayers.forEach((p, idx) => {
+    const rawClub = p.club ? p.club.trim() : '';
+    const clubKey = rawClub.toLowerCase();
+    const isIndependent = !clubKey || clubKey === 'independent' || clubKey === 'no club';
+    const groupKey = isIndependent ? `indep_${idx}` : clubKey;
+    if (!clubGroups.has(groupKey)) {
+      clubGroups.set(groupKey, []);
+    }
+    clubGroups.get(groupKey)!.push(p);
   });
 
-  // Sort clubs by player count descending so biggest clubs get separated first
-  const sortedClubs = Object.keys(clubGroups).sort(
-    (a, b) => clubGroups[b].length - clubGroups[a].length
+  // Sort clubs by player count descending so larger clubs are distributed first
+  const sortedClubs = Array.from(clubGroups.entries()).sort(
+    (a, b) => b[1].length - a[1].length
   );
 
-  // Distribute players across seeds ensuring club mates don't cluster
-  const distributedPlayers: Player[] = [];
-  const maxClubSize = Math.max(...sortedClubs.map((c) => clubGroups[c].length));
-
-  for (let i = 0; i < maxClubSize; i++) {
-    for (const club of sortedClubs) {
-      if (clubGroups[club][i]) {
-        distributedPlayers.push(clubGroups[club][i]);
-      }
+  // Order players club-by-club (largest clubs first)
+  // Placing all players of multi-member clubs first guarantees that clubs with 2 or more players
+  // are distributed across opposite halves (Pool A & Pool B) and quarters before single-member clubs take up slots.
+  const orderedPlayers: Player[] = [];
+  for (const [_, cPlayers] of sortedClubs) {
+    for (const p of cPlayers) {
+      orderedPlayers.push(p);
     }
   }
 
-  // Populate slots according to seed order
-  distributedPlayers.forEach((player, idx) => {
-    if (idx < size) {
-      const slotIndex = seedSlots[idx];
-      slots[slotIndex].player = player;
-    }
-  });
+  // Global bracket capacities
+  const numQuarters = size === 8 ? 2 : 4;
+  const numMatches = size / 2;
+  const maxPerHalf = Math.ceil(numPlayers / 2);
+  const maxPerQuarter = Math.ceil(numPlayers / numQuarters);
+  const maxPerMatch = Math.ceil(numPlayers / numMatches);
 
-  // Mark empty slots as BYE if total players is less than bracket size
-  slots.forEach((s) => {
-    if (!s.player) {
-      s.isBye = true;
+  // Track each club's total size in this category
+  const clubTotalSizes = new Map<string, number>();
+  for (const [key, cPlayers] of clubGroups) {
+    clubTotalSizes.set(key, cPlayers.length);
+  }
+
+  const assignedPlayers: (Player | null)[] = Array(size).fill(null);
+
+  const getHalf = (s: number) => Math.floor(s / (size / 2));
+  const getQuarter = (s: number) => Math.floor(s / (size / numQuarters));
+  const getMatch = (s: number) => Math.floor(s / 2);
+
+  for (const player of orderedPlayers) {
+    const rawClub = player.club ? player.club.trim() : '';
+    const clubKey = rawClub.toLowerCase();
+    const isIndependent = !clubKey || clubKey === 'independent' || clubKey === 'no club';
+    const clubTotal = isIndependent ? 1 : (clubTotalSizes.get(clubKey) || 1);
+
+    // Club-specific capacities for early-round separation
+    const maxClubPerHalf = isIndependent ? maxPerHalf : Math.ceil(clubTotal / 2);
+    const maxClubPerQuarter = isIndependent ? maxPerQuarter : Math.ceil(clubTotal / numQuarters);
+    const maxClubPerMatch = isIndependent ? maxPerMatch : Math.ceil(clubTotal / numMatches);
+
+    // Tiered placement search:
+    // Level 0: Strict all (match, quarter, half, global half, global quarter)
+    // Level 1: Relax club quarter (allow same quarter only if necessary, meeting in R2 rather than R1)
+    // Level 2: Relax global quarter capacity
+    // Level 3: Relax club half (allow same half only if necessary, meeting in R3)
+    // CRITICAL: NEVER allow same match (Round 1 clash) if club <= 8!
+    let bestSlot = -1;
+
+    for (let level = 0; level <= 3; level++) {
+      let bestScore = Infinity;
+
+      for (let s = 0; s < size; s++) {
+        if (assignedPlayers[s] !== null) continue;
+
+        const half = getHalf(s);
+        const quarter = getQuarter(s);
+        const match = getMatch(s);
+
+        let halfCount = 0;
+        let quarterCount = 0;
+        let matchCount = 0;
+
+        let clubHalfCount = 0;
+        let clubQuarterCount = 0;
+        let clubMatchCount = 0;
+
+        for (let os = 0; os < size; os++) {
+          const other = assignedPlayers[os];
+          if (!other) continue;
+
+          if (getHalf(os) === half) halfCount++;
+          if (getQuarter(os) === quarter) quarterCount++;
+          if (getMatch(os) === match) matchCount++;
+
+          if (!isIndependent) {
+            const otherClub = (other.club || '').trim().toLowerCase();
+            if (otherClub === clubKey) {
+              if (getHalf(os) === half) clubHalfCount++;
+              if (getQuarter(os) === quarter) clubQuarterCount++;
+              if (getMatch(os) === match) clubMatchCount++;
+            }
+          }
+        }
+
+        // HARD CONSTRAINT AT ALL LEVELS: NEVER ALLOW SAME-MATCH (ROUND 1 FIGHT) IF CLUB <= 8
+        if (clubMatchCount >= maxClubPerMatch) continue;
+
+        // Half capacity: ALWAYS enforce strictly equal halves
+        if (halfCount >= maxPerHalf) continue;
+
+        // Level-based constraints
+        if (level === 0 && quarterCount >= maxPerQuarter) continue;
+        if (level === 0 && matchCount >= maxPerMatch) continue;
+
+        if (level < 3 && clubHalfCount >= maxClubPerHalf) continue;
+        if (level === 0 && clubQuarterCount >= maxClubPerQuarter) continue;
+
+        let score = 0;
+        const seedIdx = preferredSlots.indexOf(s);
+        score += seedIdx * 10;
+
+        if (!isIndependent) {
+          for (let otherSlot = 0; otherSlot < size; otherSlot++) {
+            const other = assignedPlayers[otherSlot];
+            if (!other) continue;
+            const otherClub = (other.club || '').trim().toLowerCase();
+            if (otherClub === clubKey) {
+              const r = getMeetingRound(s, otherSlot, size);
+              if (r === 1) score += 10000000;
+              else if (r === 2) score += 200000;
+              else if (r === 3) score += 5000;
+            }
+          }
+        }
+
+        score += halfCount * 500;
+        score += quarterCount * 100;
+
+        if (score < bestScore) {
+          bestScore = score;
+          bestSlot = s;
+        }
+      }
+
+      if (bestSlot !== -1) break;
     }
+
+    // Ultimate fallback safety: pick any open slot that does NOT have a clubmate in the same match
+    if (bestSlot === -1) {
+      for (let s = 0; s < size; s++) {
+        if (assignedPlayers[s] !== null) continue;
+        const oppSlot = s % 2 === 0 ? s + 1 : s - 1;
+        const opp = assignedPlayers[oppSlot];
+        const oppClub = opp?.club ? opp.club.trim().toLowerCase() : '';
+        if (!oppClub || oppClub !== clubKey) {
+          bestSlot = s;
+          break;
+        }
+      }
+      if (bestSlot === -1) {
+        bestSlot = assignedPlayers.indexOf(null);
+      }
+    }
+
+    if (bestSlot !== -1) {
+      assignedPlayers[bestSlot] = player;
+    }
+  }
+
+  // Populate slots
+  slots.forEach((s, idx) => {
+    s.player = assignedPlayers[idx];
+    s.isBye = assignedPlayers[idx] === null;
   });
 
   return slots;

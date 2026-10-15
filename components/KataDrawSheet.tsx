@@ -1,6 +1,152 @@
 "use client";
-import React, { useState, useEffect } from 'react';
-import { RotateCcw } from 'lucide-react';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
+import { RotateCcw, SlidersHorizontal } from 'lucide-react';
+import { ManualKataEditorModal } from './ManualKataEditorModal';
+import { ConfirmationModal } from './ConfirmationModal';
+
+/**
+ * Auto-format Kata scores:
+ * - Range: 1.0 to 9.9
+ * - Automatically appends '.' when user types a digit 1-9 (e.g. typing '7' -> '7.')
+ * - Prevents adding a second '.' if user types '.' again (e.g. typing '.' after '7.' stays '7.')
+ * - Fast two-digit typing e.g. '75' automatically formats to '7.5'
+ */
+export const formatKataScore = (raw: string, prev: string = ''): string => {
+  if (!raw || raw.trim() === '') return '';
+
+  // Handle backspace / deletion
+  if (prev && raw.length < prev.length) {
+    if (prev.endsWith('.') && raw === prev.slice(0, -1)) {
+      return '';
+    }
+    if (prev.startsWith(raw)) {
+      return raw;
+    }
+  }
+
+  const cleaned = raw.replace(/[^0-9.]/g, '');
+  if (!cleaned) return '';
+
+  // Scores must be between 1.0 and 9.9
+  if (cleaned.startsWith('0') || cleaned.startsWith('.')) {
+    return '';
+  }
+
+  // 1. Single digit 1-9: auto append dot
+  if (/^[1-9]$/.test(cleaned)) {
+    return `${cleaned}.`;
+  }
+
+  // 2. Contains dot: '7.', '7..', '7.5', '7..5'
+  const dotIdx = cleaned.indexOf('.');
+  if (dotIdx !== -1) {
+    const intPart = cleaned.slice(0, dotIdx);
+    const decPart = cleaned.slice(dotIdx + 1).replace(/\./g, '');
+    const d1 = intPart.charAt(0);
+    if (!d1 || d1 < '1' || d1 > '9') return '';
+
+    if (!decPart) {
+      return `${d1}.`;
+    }
+    return `${d1}.${decPart.charAt(0)}`;
+  }
+
+  // 3. Multiple digits without dot: '75', '82' -> '7.5', '8.2'
+  if (/^[1-9][0-9]+$/.test(cleaned)) {
+    return `${cleaned[0]}.${cleaned[1]}`;
+  }
+
+  return cleaned.slice(0, 3);
+};
+
+export interface KataScoreCalculation {
+  total: number;
+  droppedMinIndex: number | null;
+  droppedMaxIndex: number | null;
+  validScoresCount: number;
+  isFiveJudgeDropped: boolean;
+}
+
+/**
+ * Calculates Kata total score based on official rules:
+ * - When all 5 judges enter scores: drops the lowest and highest score, summing the remaining 3 middle scores.
+ * - When 3 judges enter scores (or fewer than 5): sums all entered scores directly.
+ */
+export const computeKataScores = (scores: string[]): KataScoreCalculation => {
+  const numericItems: { val: number; idx: number }[] = [];
+
+  scores.forEach((s, idx) => {
+    const val = parseFloat(s);
+    if (!isNaN(val) && val > 0) {
+      numericItems.push({ val, idx });
+    }
+  });
+
+  const count = numericItems.length;
+
+  if (count === 0) {
+    return {
+      total: 0,
+      droppedMinIndex: null,
+      droppedMaxIndex: null,
+      validScoresCount: 0,
+      isFiveJudgeDropped: false,
+    };
+  }
+
+  // 1. If all 5 judges have entered scores: drop minimum and maximum, sum middle 3
+  if (count === 5) {
+    let minIdx = 0;
+    for (let i = 1; i < 5; i++) {
+      if (numericItems[i].val < numericItems[minIdx].val) {
+        minIdx = i;
+      }
+    }
+
+    let maxIdx = -1;
+    for (let i = 0; i < 5; i++) {
+      if (i === minIdx) continue;
+      if (maxIdx === -1 || numericItems[i].val > numericItems[maxIdx].val) {
+        maxIdx = i;
+      }
+    }
+
+    const droppedMinIdx = numericItems[minIdx].idx;
+    const droppedMaxIdx = numericItems[maxIdx].idx;
+
+    let middleSum = 0;
+    for (let i = 0; i < 5; i++) {
+      if (i !== minIdx && i !== maxIdx) {
+        middleSum += numericItems[i].val;
+      }
+    }
+
+    middleSum = Math.round(middleSum * 10) / 10;
+
+    return {
+      total: middleSum,
+      droppedMinIndex: droppedMinIdx,
+      droppedMaxIndex: droppedMaxIdx,
+      validScoresCount: 5,
+      isFiveJudgeDropped: true,
+    };
+  }
+
+  // 2. If 3 judges (or < 5 judges): sum all valid scores directly
+  let directSum = 0;
+  numericItems.forEach((item) => {
+    directSum += item.val;
+  });
+  directSum = Math.round(directSum * 10) / 10;
+
+  return {
+    total: directSum,
+    droppedMinIndex: null,
+    droppedMaxIndex: null,
+    validScoresCount: count,
+    isFiveJudgeDropped: false,
+  };
+};
 
 interface Player {
   name: string;
@@ -21,6 +167,7 @@ interface KataDrawSheetProps {
   poolName?: string;
   isBlankMode?: boolean;
   printOrientation?: 'portrait' | 'landscape';
+  categoryPlayers?: Player[];
 }
 
 export const KataDrawSheet: React.FC<KataDrawSheetProps> = ({
@@ -33,6 +180,7 @@ export const KataDrawSheet: React.FC<KataDrawSheetProps> = ({
   poolName,
   isBlankMode = false,
   printOrientation = 'portrait',
+  categoryPlayers,
 }) => {
   // Parse groupKey info (e.g. "Intermediate | Under 15 | Female")
   const parts = groupKey.split('|').map((s) => s.trim());
@@ -40,34 +188,118 @@ export const KataDrawSheet: React.FC<KataDrawSheetProps> = ({
   const ageGroup = parts[1] || 'All Ages';
   const gender = parts[2] || 'All';
 
+  // Local state for sheet competitor rows (allows manual reorder, swap, and assignment)
+  const [sheetPlayers, setSheetPlayers] = useState<(Player | null)[]>(players);
+  const [isEditModalOpen, setIsEditModalOpen] = useState(false);
+  const [isCustomized, setIsCustomized] = useState(false);
+
+  // Confirmation modal state
+  const [confirmModal, setConfirmModal] = useState<{
+    isOpen: boolean;
+    title: string;
+    message: string;
+    details?: string;
+    confirmText?: string;
+    variant?: 'danger' | 'warning' | 'info';
+    onConfirm: () => void;
+  }>({
+    isOpen: false,
+    title: '',
+    message: '',
+    onConfirm: () => {},
+  });
+
+  // Stable hash of sheet players: only changes when the actual athletes list changes!
+  // This guarantees changing orientation, printing, or parent re-renders will NEVER clear entered scores!
+  const playersHash = useMemo(() => {
+    return players
+      .map((p) => (p ? `${p.name}:::${p.club || ''}` : '__null__'))
+      .join('|');
+  }, [players]);
+
+  const prevPlayersHashRef = useRef<string | null>(null);
+
+  useEffect(() => {
+    if (prevPlayersHashRef.current !== playersHash) {
+      prevPlayersHashRef.current = playersHash;
+      setSheetPlayers(players);
+      setIsCustomized(false);
+      setRowState((prev) => {
+        const next: Record<number, { customName: string; customClub: string; kata: string; scores: string[] }> = {};
+        players.forEach((_, idx) => {
+          next[idx] = prev[idx] || {
+            customName: '',
+            customClub: '',
+            kata: '',
+            scores: ['', '', '', '', ''],
+          };
+        });
+        return next;
+      });
+    }
+  }, [playersHash, players]);
+
+  const hasEnteredScores = () => {
+    return Object.values(rowState).some((r) => r.scores.some((s) => s.trim() !== ''));
+  };
+
+  const executeApplyManualDraw = (newRows: (Player | null)[]) => {
+    setSheetPlayers(newRows);
+    setIsCustomized(true);
+  };
+
+  const handleApplyManualDraw = (newRows: (Player | null)[]) => {
+    if (hasEnteredScores()) {
+      setConfirmModal({
+        isOpen: true,
+        title: 'Modify Kata Performance Order?',
+        message: 'Scores have already been entered for competitors on this sheet.',
+        details: 'Modifying the order will apply the new competitors but keep scoring slots aligned with the updated rows.',
+        confirmText: 'Apply Order',
+        variant: 'warning',
+        onConfirm: () => {
+          executeApplyManualDraw(newRows);
+          setConfirmModal((prev) => ({ ...prev, isOpen: false }));
+        },
+      });
+      return;
+    }
+    executeApplyManualDraw(newRows);
+  };
+
   // Scoring state: Map of player index -> { customName: string, customClub: string, kata: string, scores: [j1, j2, j3, j4, j5] }
   const [rowState, setRowState] = useState<
     Record<number, { customName: string; customClub: string; kata: string; scores: string[] }>
   >({});
 
-  // Initialize row state
-  useEffect(() => {
-    const initial: Record<number, { customName: string; customClub: string; kata: string; scores: string[] }> = {};
-    players.forEach((_, idx) => {
-      initial[idx] = {
-        customName: '',
-        customClub: '',
-        kata: '',
-        scores: ['', '', '', '', ''],
-      };
-    });
-    setRowState(initial);
-  }, [players]);
-
-  const handleScoreChange = (rowIdx: number, judgeIdx: number, val: string) => {
+  const handleScoreChange = (rowIdx: number, judgeIdx: number, rawVal: string) => {
     setRowState((prev) => {
       const current = prev[rowIdx] || { customName: '', customClub: '', kata: '', scores: ['', '', '', '', ''] };
+      const prevScore = current.scores[judgeIdx] || '';
+      const formatted = formatKataScore(rawVal, prevScore);
       const nextScores = [...current.scores];
-      nextScores[judgeIdx] = val;
+      nextScores[judgeIdx] = formatted;
       return {
         ...prev,
         [rowIdx]: { ...current, scores: nextScores },
       };
+    });
+  };
+
+  const handleScoreBlur = (rowIdx: number, judgeIdx: number) => {
+    setRowState((prev) => {
+      const current = prev[rowIdx];
+      if (!current) return prev;
+      const val = current.scores[judgeIdx];
+      if (val && val.endsWith('.')) {
+        const nextScores = [...current.scores];
+        nextScores[judgeIdx] = `${val}0`; // Auto-complete e.g. "7." to "7.0" on blur
+        return {
+          ...prev,
+          [rowIdx]: { ...current, scores: nextScores },
+        };
+      }
+      return prev;
     });
   };
 
@@ -91,7 +323,7 @@ export const KataDrawSheet: React.FC<KataDrawSheetProps> = ({
     });
   };
 
-  const handleResetScores = () => {
+  const executeResetScores = () => {
     const initial: Record<number, { customName: string; customClub: string; kata: string; scores: string[] }> = {};
     players.forEach((_, idx) => {
       initial[idx] = { customName: '', customClub: '', kata: '', scores: ['', '', '', '', ''] };
@@ -99,28 +331,45 @@ export const KataDrawSheet: React.FC<KataDrawSheetProps> = ({
     setRowState(initial);
   };
 
-  const calculateTotal = (scores: string[]): number => {
-    return scores.reduce((sum, s) => {
-      const num = parseFloat(s);
-      return sum + (isNaN(num) ? 0 : num);
-    }, 0);
+  const handleResetScores = () => {
+    if (hasEnteredScores()) {
+      setConfirmModal({
+        isOpen: true,
+        title: 'Reset All Judge Scores?',
+        message: 'Judge scores have already been entered for competitors on this sheet.',
+        details: 'Resetting will clear all 5 judge scores and auto-calculated total rankings.',
+        confirmText: 'Yes, Reset Scores',
+        variant: 'danger',
+        onConfirm: () => {
+          executeResetScores();
+          setConfirmModal((prev) => ({ ...prev, isOpen: false }));
+        },
+      });
+      return;
+    }
+    executeResetScores();
   };
 
-  // Rank players by total score
-  const activeRows = players.map((p, idx) => {
+  const calculateTotal = (scores: string[]): number => {
+    return computeKataScores(scores).total;
+  };
+
+  // Rank players by total score (drops lowest/highest for 5 judges, sums all for 3 judges)
+  const activeRows = sheetPlayers.map((p, idx) => {
     const data = rowState[idx] || { customName: '', customClub: '', kata: '', scores: ['', '', '', '', ''] };
     const name = p?.name || data.customName;
     const club = p?.club || data.customClub;
-    const total = calculateTotal(data.scores);
+    const calc = computeKataScores(data.scores);
     const hasScores = data.scores.some((s) => s.trim() !== '');
     return {
       index: idx,
       name,
       club,
       isAssigned: p !== null || name.trim() !== '',
-      total,
+      total: calc.total,
       hasScores,
       kata: data.kata,
+      calc,
     };
   });
 
@@ -166,20 +415,38 @@ export const KataDrawSheet: React.FC<KataDrawSheetProps> = ({
 
       {/* Interactive Controls Bar for Live Kata Scoring (Hidden during Print) */}
       <div className="flex justify-between items-center bg-slate-50 p-2.5 rounded-lg border border-slate-200 mb-4 print:hidden text-xs">
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-3">
           <span className="font-bold text-slate-700 uppercase">
-            5-Judge Scoring System ({players.length} Fixed Rows)
+            Scoring System ({sheetPlayers.length} Fixed Rows)
           </span>
-          <span className="text-slate-400">| Enter judge scores (e.g. 7.5, 8.0) to auto-calculate totals & ranks</span>
+          <span className="text-slate-400">
+            | 5 judges: drops min & max (middle 3 sum) • 3 judges: sums all
+          </span>
+          {isCustomized && (
+            <span className="bg-orange-100 text-orange-800 text-[10px] px-2 py-0.5 rounded-full font-bold uppercase tracking-wider flex items-center gap-1">
+              <span className="w-1.5 h-1.5 rounded-full bg-orange-600"></span>
+              Custom Order Active
+            </span>
+          )}
         </div>
-        <button
-          onClick={handleResetScores}
-          className="flex items-center gap-1 text-slate-600 hover:text-black font-semibold px-2.5 py-1 bg-white border border-slate-200 rounded shadow-xs hover:bg-slate-100 transition-all cursor-pointer"
-          title="Reset all entered scores"
-        >
-          <RotateCcw size={12} />
-          Reset Scores
-        </button>
+        <div className="flex items-center gap-2">
+          <button
+            onClick={() => setIsEditModalOpen(true)}
+            className="flex items-center gap-1.5 text-orange-700 hover:text-orange-900 font-bold px-3 py-1 bg-orange-50 hover:bg-orange-100 border border-orange-200 rounded-md shadow-xs transition-all cursor-pointer"
+            title="Manually customize, swap, or reorder Kata draw slots"
+          >
+            <SlidersHorizontal size={13} />
+            Edit Draw (Manual)
+          </button>
+          <button
+            onClick={handleResetScores}
+            className="flex items-center gap-1 text-slate-600 hover:text-black font-semibold px-2.5 py-1 bg-white border border-slate-200 rounded shadow-xs hover:bg-slate-100 transition-all cursor-pointer"
+            title="Reset all entered scores"
+          >
+            <RotateCcw size={12} />
+            Reset Scores
+          </button>
+        </div>
       </div>
 
       {/* 3. Official Kata Scoring Table with Fixed Rows */}
@@ -205,13 +472,14 @@ export const KataDrawSheet: React.FC<KataDrawSheetProps> = ({
             </tr>
           </thead>
           <tbody>
-            {players.map((p, idx) => {
+            {sheetPlayers.map((p, idx) => {
               const currentData = rowState[idx] || { customName: '', customClub: '', kata: '', scores: ['', '', '', '', ''] };
               const playerName = p?.name || currentData.customName;
               const playerClub = p?.club || currentData.customClub;
               const isAssigned = p !== null || playerName.trim() !== '';
 
-              const totalScore = calculateTotal(currentData.scores);
+              const calcResult = computeKataScores(currentData.scores);
+              const totalScore = calcResult.total;
               const hasScores = currentData.scores.some((s) => s.trim() !== '');
               const rankIdx = rankedCompetitors.findIndex((r) => r.index === idx);
 
@@ -295,26 +563,65 @@ export const KataDrawSheet: React.FC<KataDrawSheetProps> = ({
                   </td>
 
                   {/* 5 Judge Score Cells */}
-                  {[0, 1, 2, 3, 4].map((jIdx) => (
-                    <td key={jIdx} className="border-2 border-slate-900 p-0.5 text-center overflow-hidden">
-                      {isBlankMode ? (
-                        <div className="h-5"></div>
-                      ) : (
-                        <input
-                          type="text"
-                          inputMode="decimal"
-                          value={currentData.scores[jIdx]}
-                          onChange={(e) => handleScoreChange(idx, jIdx, e.target.value)}
-                          className="w-full text-center py-0.5 px-0 bg-transparent font-bold text-slate-900 focus:outline-blue-500 text-xs print:placeholder:text-transparent"
-                          placeholder={isAssigned ? "—" : ""}
-                        />
-                      )}
-                    </td>
-                  ))}
+                  {[0, 1, 2, 3, 4].map((jIdx) => {
+                    const isDroppedMin = calcResult.isFiveJudgeDropped && jIdx === calcResult.droppedMinIndex;
+                    const isDroppedMax = calcResult.isFiveJudgeDropped && jIdx === calcResult.droppedMaxIndex;
+                    const isDropped = isDroppedMin || isDroppedMax;
+
+                    return (
+                      <td
+                        key={jIdx}
+                        className={`border-2 border-slate-900 p-0.5 text-center overflow-hidden transition-colors ${
+                          isDropped ? 'bg-rose-50/70 print:bg-slate-100/80' : ''
+                        }`}
+                        title={
+                          isDroppedMin
+                            ? 'Lowest score: Dropped from 5-Judge Total'
+                            : isDroppedMax
+                            ? 'Highest score: Dropped from 5-Judge Total'
+                            : undefined
+                        }
+                      >
+                        {isBlankMode ? (
+                          <div className="h-5"></div>
+                        ) : (
+                          <input
+                            type="text"
+                            inputMode="decimal"
+                            value={currentData.scores[jIdx]}
+                            onChange={(e) => handleScoreChange(idx, jIdx, e.target.value)}
+                            onBlur={() => handleScoreBlur(idx, jIdx)}
+                            className={`w-full text-center py-0.5 px-0 bg-transparent font-bold focus:outline-blue-500 text-xs print:placeholder:text-transparent ${
+                              isDropped
+                                ? 'line-through text-slate-400 font-semibold decoration-rose-600 decoration-2 print:decoration-slate-700'
+                                : 'text-slate-900'
+                            }`}
+                            placeholder={isAssigned ? "—" : ""}
+                          />
+                        )}
+                      </td>
+                    );
+                  })}
 
                   {/* Total Score */}
-                  <td className="border-2 border-slate-900 text-center font-black text-xs bg-slate-50/80 print:bg-white text-slate-900">
-                    {isBlankMode || !hasScores || !isAssigned ? "" : totalScore.toFixed(1)}
+                  <td className="border-2 border-slate-900 text-center font-black text-xs bg-slate-50/80 print:bg-white text-slate-900 py-1">
+                    {isBlankMode || !hasScores || !isAssigned ? (
+                      ""
+                    ) : (
+                      <div>
+                        <span>{totalScore.toFixed(1)}</span>
+                        {calcResult.isFiveJudgeDropped && (
+                          <span className="block text-[8px] font-bold text-emerald-700 print:text-[7px] print:text-slate-500 leading-none mt-0.5 uppercase tracking-tight">
+                            Mid 3
+                          </span>
+                        )}
+                        {!calcResult.isFiveJudgeDropped && calcResult.validScoresCount === 3 && (
+                          <span className="block text-[8px] font-bold text-blue-700 print:text-[7px] print:text-slate-500 leading-none mt-0.5 uppercase tracking-tight">
+                            3-Judge
+                          </span>
+                        )}
+                      </div>
+                    )}
                   </td>
 
                   {/* Rank */}
@@ -390,6 +697,30 @@ export const KataDrawSheet: React.FC<KataDrawSheetProps> = ({
           margin: 5mm 6mm;
         }
       `}} />
+
+      {/* Manual Kata Draw Editor Modal */}
+      <ManualKataEditorModal
+        isOpen={isEditModalOpen}
+        onClose={() => setIsEditModalOpen(false)}
+        initialRows={sheetPlayers}
+        categoryPlayers={categoryPlayers || sheetPlayers.filter((p): p is Player => p !== null)}
+        categoryTitle={`KATA INDIVIDUAL ${categoryName} (${gender}) ${poolName ? `[${poolName}]` : ''}`}
+        startNumber={startNumber}
+        poolName={poolName}
+        onApply={handleApplyManualDraw}
+      />
+
+      {/* Safety Confirmation Modal */}
+      <ConfirmationModal
+        isOpen={confirmModal.isOpen}
+        title={confirmModal.title}
+        message={confirmModal.message}
+        details={confirmModal.details}
+        confirmText={confirmModal.confirmText}
+        variant={confirmModal.variant}
+        onConfirm={confirmModal.onConfirm}
+        onCancel={() => setConfirmModal((prev) => ({ ...prev, isOpen: false }))}
+      />
     </div>
   );
 };

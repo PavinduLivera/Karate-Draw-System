@@ -1,5 +1,5 @@
 "use client";
-import React, { useState } from 'react';
+import React, { useState, useMemo } from 'react';
 import { 
   Printer, 
   GitBranch, 
@@ -21,17 +21,19 @@ interface KumiteSectionProps {
 }
 
 const KumiteSection: React.FC<KumiteSectionProps> = ({ data }) => {
-  const kumitePlayers = data.filter((p) => p.eventType === 'Kumite');
+  const kumitePlayers = useMemo(() => data.filter((p) => p.eventType === 'Kumite'), [data]);
 
   // Group players by unique category key
-  const groupedData = kumitePlayers.reduce((groups: Record<string, any[]>, player) => {
-    const key = `${player.category} | ${player.ageGroup} | ${player.weight} | ${player.gender}`;
-    if (!groups[key]) groups[key] = [];
-    groups[key].push(player);
-    return groups;
-  }, {});
+  const groupedData = useMemo(() => {
+    return kumitePlayers.reduce((groups: Record<string, any[]>, player) => {
+      const key = `${player.category} | ${player.ageGroup} | ${player.weight} | ${player.gender}`;
+      if (!groups[key]) groups[key] = [];
+      groups[key].push(player);
+      return groups;
+    }, {});
+  }, [kumitePlayers]);
 
-  const categoryKeys = Object.keys(groupedData);
+  const categoryKeys = useMemo(() => Object.keys(groupedData), [groupedData]);
 
   // Championship title from data or default
   const defaultChampionship = kumitePlayers[0]?.championship || "COIMBATORE DISTRICT KARATE CHAMPIONSHIP 2025";
@@ -44,9 +46,11 @@ const KumiteSection: React.FC<KumiteSectionProps> = ({ data }) => {
   const [printOrientation, setPrintOrientation] = useState<'landscape' | 'portrait'>('landscape');
 
   // Filter categories by search
-  const filteredCategoryKeys = categoryKeys.filter((key) =>
-    key.toLowerCase().includes(searchQuery.toLowerCase())
-  );
+  const filteredCategoryKeys = useMemo(() => {
+    return categoryKeys.filter((key) =>
+      key.toLowerCase().includes(searchQuery.toLowerCase())
+    );
+  }, [categoryKeys, searchQuery]);
 
   const handlePrint = (singleOnly = false) => {
     if (singleOnly && !viewAll) {
