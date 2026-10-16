@@ -1,5 +1,5 @@
 "use client";
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import { 
   Printer, 
   Trophy, 
@@ -20,12 +20,24 @@ interface KataSectionProps {
 }
 
 const KataSection: React.FC<KataSectionProps> = ({ data }) => {
-  const kataPlayers = useMemo(() => data.filter((p) => p.eventType === 'Kata'), [data]);
+  const kataPlayers = useMemo(() => {
+    return data.filter((p) => {
+      const ev = (p.eventType || '').trim().toLowerCase();
+      const cat = (p.category || '').trim().toLowerCase();
+      return ev === 'kata' || ev === 'team kata' || ev.includes('kata') || cat.includes('team kata');
+    });
+  }, [data]);
 
   // Group players by unique category key (Category | Age Group | Gender)
   const groupedData = useMemo(() => {
     return kataPlayers.reduce((groups: Record<string, any[]>, player) => {
-      const key = `${player.category} | ${player.ageGroup} | ${player.gender}`;
+      const isTeam = (player.eventType || '').toLowerCase() === 'team kata' || (player.category || '').toLowerCase().includes('team kata');
+      let catName = player.category || (isTeam ? 'Team Kata' : 'Open');
+      // Prefix with "Team Kata - " if not already containing team to guarantee separate sheets from individual kata
+      if (isTeam && !catName.toLowerCase().includes('team')) {
+        catName = `Team Kata - ${catName}`;
+      }
+      const key = `${catName} | ${player.ageGroup || 'All Ages'} | ${player.gender || 'Mixed'}`;
       if (!groups[key]) groups[key] = [];
       groups[key].push(player);
       return groups;
@@ -33,6 +45,9 @@ const KataSection: React.FC<KataSectionProps> = ({ data }) => {
   }, [kataPlayers]);
 
   const categoryKeys = useMemo(() => Object.keys(groupedData), [groupedData]);
+
+  // Sub-filter: all, individual, team
+  const [eventSubFilter, setEventSubFilter] = useState<'all' | 'individual' | 'team'>('all');
 
   // Championship title from data or default
   const defaultChampionship = kataPlayers[0]?.championship || "COIMBATORE DISTRICT KARATE CHAMPIONSHIP 2025";
@@ -49,12 +64,24 @@ const KataSection: React.FC<KataSectionProps> = ({ data }) => {
   // Print orientation (portrait or landscape)
   const [printOrientation, setPrintOrientation] = useState<'portrait' | 'landscape'>('portrait');
 
-  // Filter categories by search
+  // Filter categories by search and event sub-filter (individual vs team)
   const filteredCategoryKeys = useMemo(() => {
-    return categoryKeys.filter((key) =>
-      key.toLowerCase().includes(searchQuery.toLowerCase())
-    );
-  }, [categoryKeys, searchQuery]);
+    return categoryKeys.filter((key) => {
+      const matchesSearch = key.toLowerCase().includes(searchQuery.toLowerCase());
+      if (!matchesSearch) return false;
+      const isTeam = key.toLowerCase().includes('team');
+      if (eventSubFilter === 'individual') return !isTeam;
+      if (eventSubFilter === 'team') return isTeam;
+      return true;
+    });
+  }, [categoryKeys, searchQuery, eventSubFilter]);
+
+  // Keep selectedCategory valid when filtering
+  useEffect(() => {
+    if (filteredCategoryKeys.length > 0 && !filteredCategoryKeys.includes(selectedCategory)) {
+      setSelectedCategory(filteredCategoryKeys[0]);
+    }
+  }, [filteredCategoryKeys, selectedCategory]);
 
   const handlePrint = () => {
     window.print();
@@ -258,37 +285,100 @@ const KataSection: React.FC<KataSectionProps> = ({ data }) => {
           </div>
         </div>
 
-        {/* Category Pills Navigation */}
-        {!viewAll && filteredCategoryKeys.length > 0 && (
-          <div className="pt-2 border-t border-slate-100 space-y-2">
-            <div className="flex items-center justify-between text-xs text-slate-500 font-semibold">
-              <span>Select Category to View / Manage ({filteredCategoryKeys.length} available):</span>
-              <span>Total Kata Competitors: <strong className="text-slate-900">{kataPlayers.length}</strong></span>
+        {/* Category Pills Navigation & Sub-Filter */}
+        {!viewAll && (
+          <div className="pt-2 border-t border-slate-100 space-y-3">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 text-xs">
+              {/* Filter Tabs: All / Individual / Team Kata */}
+              <div className="flex items-center gap-1 bg-slate-100 p-1 rounded-xl border border-slate-200">
+                <button
+                  type="button"
+                  onClick={() => setEventSubFilter('all')}
+                  className={`px-3 py-1 rounded-lg text-xs font-bold transition-all cursor-pointer ${
+                    eventSubFilter === 'all'
+                      ? 'bg-white text-slate-900 shadow-xs'
+                      : 'text-slate-600 hover:text-black'
+                  }`}
+                >
+                  All ({categoryKeys.length})
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setEventSubFilter('individual')}
+                  className={`px-3 py-1 rounded-lg text-xs font-bold transition-all cursor-pointer ${
+                    eventSubFilter === 'individual'
+                      ? 'bg-white text-orange-600 shadow-xs'
+                      : 'text-slate-600 hover:text-black'
+                  }`}
+                >
+                  Individual ({categoryKeys.filter((k) => !k.toLowerCase().includes('team')).length})
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setEventSubFilter('team')}
+                  className={`flex items-center gap-1.5 px-3 py-1 rounded-lg text-xs font-bold transition-all cursor-pointer ${
+                    eventSubFilter === 'team'
+                      ? 'bg-white text-purple-700 shadow-xs'
+                      : 'text-slate-600 hover:text-black'
+                  }`}
+                >
+                  <Users size={13} className="text-purple-600" />
+                  Team Kata ({categoryKeys.filter((k) => k.toLowerCase().includes('team')).length})
+                </button>
+              </div>
+
+              <div className="text-slate-500 font-semibold text-[11px]">
+                Total Kata Athletes & Teams: <strong className="text-slate-900 font-black">{kataPlayers.length}</strong>
+              </div>
             </div>
-            <div className="flex flex-wrap gap-2 max-h-36 overflow-y-auto pr-1">
-              {filteredCategoryKeys.map((key) => {
-                const isSelected = selectedCategory === key;
-                const count = groupedData[key]?.length || 0;
-                return (
-                  <button
-                    key={key}
-                    onClick={() => setSelectedCategory(key)}
-                    className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all cursor-pointer flex items-center gap-2 border ${
-                      isSelected
-                        ? 'bg-slate-900 text-white border-slate-900 shadow-sm'
-                        : 'bg-white text-slate-600 border-slate-200 hover:bg-slate-50 hover:border-slate-300'
-                    }`}
-                  >
-                    <span>{key}</span>
-                    <span className={`text-[10px] px-1.5 py-0.5 rounded-md ${
-                      isSelected ? 'bg-white/20 text-white' : 'bg-slate-100 text-slate-500'
-                    }`}>
-                      {count}
-                    </span>
-                  </button>
-                );
-              })}
-            </div>
+
+            {filteredCategoryKeys.length > 0 ? (
+              <div className="flex flex-wrap gap-2 max-h-36 overflow-y-auto pr-1">
+                {filteredCategoryKeys.map((key) => {
+                  const isSelected = selectedCategory === key;
+                  const count = groupedData[key]?.length || 0;
+                  const isTeam = key.toLowerCase().includes('team');
+
+                  return (
+                    <button
+                      key={key}
+                      onClick={() => setSelectedCategory(key)}
+                      className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all cursor-pointer flex items-center gap-2 border ${
+                        isSelected
+                          ? isTeam
+                            ? 'bg-purple-900 text-white border-purple-900 shadow-sm'
+                            : 'bg-slate-900 text-white border-slate-900 shadow-sm'
+                          : isTeam
+                            ? 'bg-purple-50/50 text-purple-900 border-purple-200 hover:bg-purple-100 hover:border-purple-300'
+                            : 'bg-white text-slate-600 border-slate-200 hover:bg-slate-50 hover:border-slate-300'
+                      }`}
+                    >
+                      {isTeam && (
+                        <span className={`text-[9px] px-1.5 py-0.2 rounded font-black uppercase tracking-wider flex items-center gap-1 ${
+                          isSelected ? 'bg-purple-800 text-purple-200' : 'bg-purple-200/80 text-purple-800'
+                        }`}>
+                          <Users size={10} /> Team
+                        </span>
+                      )}
+                      <span>{key}</span>
+                      <span className={`text-[10px] px-1.5 py-0.5 rounded-md ${
+                        isSelected
+                          ? 'bg-white/20 text-white'
+                          : isTeam
+                            ? 'bg-purple-200/60 text-purple-800'
+                            : 'bg-slate-100 text-slate-500'
+                      }`}>
+                        {count} {isTeam ? (count === 1 ? 'team' : 'teams') : ''}
+                      </span>
+                    </button>
+                  );
+                })}
+              </div>
+            ) : (
+              <div className="p-4 text-center text-xs font-medium text-slate-400 bg-slate-50 rounded-xl border border-dashed border-slate-200">
+                No Kata categories found matching filter.
+              </div>
+            )}
           </div>
         )}
       </div>

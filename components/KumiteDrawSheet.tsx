@@ -407,12 +407,14 @@ export const KumiteDrawSheet: React.FC<KumiteDrawSheetProps> = ({
       {/* 2. Official Metadata Grid Bar (Exact match to photograph) */}
       <div className="border-2 border-slate-900 grid grid-cols-12 text-xs font-bold uppercase tracking-tight divide-x-2 divide-slate-900 bg-slate-50/50 print:bg-white mb-6 print:mb-2 print:text-[10px]">
         <div className="col-span-3 px-3 py-2 print:py-1 print:px-2 flex items-center bg-slate-100 print:bg-slate-100/50">
-          <span className="font-extrabold text-slate-900">DRAW SYSTEM (KUMITE)</span>
+          <span className="font-extrabold text-slate-900">
+            {groupKey.toLowerCase().includes('team') ? 'DRAW SYSTEM (TEAM KUMITE)' : 'DRAW SYSTEM (KUMITE)'}
+          </span>
         </div>
         <div className="col-span-5 px-3 py-2 print:py-1 print:px-2 flex items-center truncate">
           <span className="text-slate-500 mr-1.5 font-medium">EVENT:</span>
           <span className="text-slate-900 font-black truncate">
-            KUMITE INDIVIDUAL {categoryName} {weightClass} ({gender})
+            {groupKey.toLowerCase().includes('team') ? 'KUMITE TEAM' : 'KUMITE INDIVIDUAL'} {categoryName} {weightClass} ({gender})
           </span>
         </div>
         <div className="col-span-2 px-3 py-2 print:py-1 print:px-2 flex items-center">

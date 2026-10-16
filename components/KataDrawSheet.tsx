@@ -183,11 +183,31 @@ export const KataDrawSheet: React.FC<KataDrawSheetProps> = ({
   printOrientation = 'portrait',
   categoryPlayers,
 }) => {
-  // Parse groupKey info (e.g. "Intermediate | Under 15 | Female")
+  // Parse groupKey info (e.g. "Intermediate | Under 15 | Female" or "Team Kata - Cadet | Under 15 | Female")
   const parts = groupKey.split('|').map((s) => s.trim());
   const categoryName = parts[0] || 'Open';
   const ageGroup = parts[1] || 'All Ages';
   const gender = parts[2] || 'All';
+
+  // Check if this sheet is for Team Kata
+  const isTeam = groupKey.toLowerCase().includes('team') || categoryName.toLowerCase().includes('team');
+
+  // Clean category division: if it has "Team Kata", extract the division name if any
+  let displayDivision = categoryName;
+  if (isTeam) {
+    displayDivision = displayDivision
+      .replace(/^Team\s*Kata\s*[-–:]*\s*/i, '')
+      .replace(/\s*Team\s*Kata\s*/i, '')
+      .replace(/\(Team\s*Kata\)/i, '')
+      .trim();
+  }
+
+  // Official Event Title:
+  // If Team Kata: "TEAM KATA" or "TEAM KATA [DIVISION]" (e.g. "TEAM KATA (Male)" or "TEAM KATA CADET (Male)")
+  // If Individual: "KATA INDIVIDUAL [CATEGORY] (Male)"
+  const eventTitle = isTeam
+    ? `TEAM KATA ${displayDivision ? `${displayDivision.toUpperCase()} ` : ''}(${gender}) ${poolName ? `[${poolName}]` : ''}`.replace(/\s+/g, ' ').trim()
+    : `KATA INDIVIDUAL ${categoryName} (${gender}) ${poolName ? `[${poolName}]` : ''}`.replace(/\s+/g, ' ').trim();
 
   // Unique datalist ID for official Kata suggestions
   const kataDatalistId = useMemo(() => {
@@ -401,12 +421,14 @@ export const KataDrawSheet: React.FC<KataDrawSheetProps> = ({
       {/* 2. Official Metadata Grid Bar (Exact match to Kumite Sheet) */}
       <div className="border-2 border-slate-900 grid grid-cols-12 text-xs font-bold uppercase tracking-tight divide-x-2 divide-slate-900 bg-slate-50/50 print:bg-white mb-6 print:mb-2 print:text-[10px]">
         <div className="col-span-3 px-3 py-2 print:py-1 print:px-2 flex items-center bg-slate-100 print:bg-slate-100/50">
-          <span className="font-extrabold text-slate-900">SCORING SYSTEM (KATA)</span>
+          <span className="font-extrabold text-slate-900">
+            {isTeam ? 'SCORING SYSTEM (TEAM KATA)' : 'SCORING SYSTEM (KATA)'}
+          </span>
         </div>
         <div className="col-span-5 px-3 py-2 print:py-1 print:px-2 flex items-center truncate">
           <span className="text-slate-500 mr-1.5 font-medium">EVENT:</span>
           <span className="text-slate-900 font-black truncate">
-            KATA INDIVIDUAL {categoryName} ({gender}) {poolName ? `[${poolName}]` : ''}
+            {eventTitle}
           </span>
         </div>
         <div className="col-span-2 px-3 py-2 print:py-1 print:px-2 flex items-center">
@@ -461,7 +483,9 @@ export const KataDrawSheet: React.FC<KataDrawSheetProps> = ({
           <thead>
             <tr className="bg-slate-900 text-white font-extrabold uppercase tracking-wider text-[10px] sm:text-[11px] print:bg-slate-100 print:text-black">
               <th className="border-2 border-slate-900 py-2 px-1 w-[5%] text-center">NO.</th>
-              <th className="border-2 border-slate-900 py-2 px-2 text-left w-[27%]">COMPETITOR NAME</th>
+              <th className="border-2 border-slate-900 py-2 px-2 text-left w-[27%]">
+                {groupKey.toLowerCase().includes('team') ? 'TEAM / COMPETITORS' : 'COMPETITOR NAME'}
+              </th>
               <th className="border-2 border-slate-900 py-2 px-2 text-left w-[21%]">CLUB / ASSOCIATION</th>
               <th className="border-2 border-slate-900 py-2 px-1 text-left w-[17%]">KATA PERFORMED</th>
               {[1, 2, 3, 4, 5].map((j) => (
@@ -712,7 +736,7 @@ export const KataDrawSheet: React.FC<KataDrawSheetProps> = ({
         onClose={() => setIsEditModalOpen(false)}
         initialRows={sheetPlayers}
         categoryPlayers={categoryPlayers || sheetPlayers.filter((p): p is Player => p !== null)}
-        categoryTitle={`KATA INDIVIDUAL ${categoryName} (${gender}) ${poolName ? `[${poolName}]` : ''}`}
+        categoryTitle={eventTitle}
         startNumber={startNumber}
         poolName={poolName}
         onApply={handleApplyManualDraw}

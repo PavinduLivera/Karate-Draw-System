@@ -23,7 +23,7 @@ import {
 export interface PlayerItem {
   id?: string;
   championship?: string;
-  eventType: 'Kata' | 'Kumite' | string;
+  eventType: 'Kata' | 'Kumite' | 'Team Kata' | string;
   category: string;
   ageGroup?: string;
   weight?: string;
@@ -57,7 +57,7 @@ export const PlayersManager: React.FC<PlayersManagerProps> = ({
   // Form state
   const [formName, setFormName] = useState('');
   const [formClub, setFormClub] = useState('');
-  const [formEvent, setFormEvent] = useState<'Kumite' | 'Kata'>('Kumite');
+  const [formEvent, setFormEvent] = useState<'Kumite' | 'Kata' | 'Team Kata'>('Kumite');
   const [formCategory, setFormCategory] = useState('');
   const [formAgeGroup, setFormAgeGroup] = useState('');
   const [formWeight, setFormWeight] = useState('');
@@ -104,8 +104,17 @@ export const PlayersManager: React.FC<PlayersManagerProps> = ({
   const defaultChampionship = players[0]?.championship || 'COIMBATORE DISTRICT KARATE CHAMPIONSHIP 2025';
 
   // Stats
-  const kumiteCount = useMemo(() => players.filter((p) => p.eventType?.toLowerCase() === 'kumite').length, [players]);
-  const kataCount = useMemo(() => players.filter((p) => p.eventType?.toLowerCase() === 'kata').length, [players]);
+  const kumiteCount = useMemo(() => players.filter((p) => (p.eventType || '').toLowerCase().includes('kumite')).length, [players]);
+  const teamKataCount = useMemo(() => players.filter((p) => {
+    const ev = (p.eventType || '').toLowerCase();
+    const cat = (p.category || '').toLowerCase();
+    return ev === 'team kata' || ev.includes('team kata') || cat.includes('team kata');
+  }).length, [players]);
+  const kataCount = useMemo(() => players.filter((p) => {
+    const ev = (p.eventType || '').toLowerCase();
+    const cat = (p.category || '').toLowerCase();
+    return (ev === 'kata' || ev.includes('kata')) && !ev.includes('team') && !cat.includes('team kata');
+  }).length, [players]);
 
   // Filtered Players list
   const filteredPlayers = useMemo(() => {
@@ -118,8 +127,16 @@ export const PlayersManager: React.FC<PlayersManagerProps> = ({
         if (!matchesName && !matchesClub && !matchesCategory) return false;
       }
 
-      if (filterEvent !== 'all' && (p.eventType || '').toLowerCase() !== filterEvent.toLowerCase()) {
-        return false;
+      if (filterEvent !== 'all') {
+        const ev = (p.eventType || '').toLowerCase();
+        const cat = (p.category || '').toLowerCase();
+        if (filterEvent === 'team kata') {
+          if (ev !== 'team kata' && !cat.includes('team kata')) return false;
+        } else if (filterEvent === 'kata') {
+          if ((ev !== 'kata' && !ev.includes('kata')) || ev.includes('team') || cat.includes('team kata')) return false;
+        } else if (filterEvent === 'kumite') {
+          if (!ev.includes('kumite')) return false;
+        }
       }
 
       if (filterGender !== 'all' && (p.gender || '').toLowerCase() !== filterGender.toLowerCase()) {
@@ -158,7 +175,7 @@ export const PlayersManager: React.FC<PlayersManagerProps> = ({
     setEditingPlayerId(player.id || null);
     setFormName(player.name || '');
     setFormClub(player.club || '');
-    setFormEvent((player.eventType as 'Kumite' | 'Kata') || 'Kumite');
+    setFormEvent((player.eventType as 'Kumite' | 'Kata' | 'Team Kata') || 'Kumite');
     setFormCategory(player.category || '');
     setFormAgeGroup(player.ageGroup || '');
     setFormWeight(player.weight || '');
@@ -180,6 +197,12 @@ export const PlayersManager: React.FC<PlayersManagerProps> = ({
       return;
     }
 
+    const isTeam = formEvent === 'Team Kata';
+    let cat = formCategory.trim() || (isTeam ? 'Team Kata' : 'Open');
+    if (isTeam && !cat.toLowerCase().includes('team')) {
+      cat = `Team Kata - ${cat}`;
+    }
+
     if (editingPlayerId) {
       // Update existing
       const updated = players.map((p) => {
@@ -189,7 +212,7 @@ export const PlayersManager: React.FC<PlayersManagerProps> = ({
             name: formName.trim(),
             club: formClub.trim(),
             eventType: formEvent,
-            category: formCategory.trim() || 'Open',
+            category: cat,
             ageGroup: formAgeGroup.trim() || 'All Ages',
             weight: formEvent === 'Kumite' ? formWeight.trim() || 'Open Weight' : '',
             gender: formGender,
@@ -207,7 +230,7 @@ export const PlayersManager: React.FC<PlayersManagerProps> = ({
         name: formName.trim(),
         club: formClub.trim(),
         eventType: formEvent,
-        category: formCategory.trim() || 'Open',
+        category: cat,
         ageGroup: formAgeGroup.trim() || 'All Ages',
         weight: formEvent === 'Kumite' ? formWeight.trim() || 'Open Weight' : '',
         gender: formGender,
@@ -297,10 +320,10 @@ export const PlayersManager: React.FC<PlayersManagerProps> = ({
       </div>
 
       {/* Stat Cards */}
-      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 sm:gap-4">
+      <div className="grid grid-cols-2 sm:grid-cols-5 gap-3">
         <div className="bg-slate-50 border border-slate-200 rounded-xl p-3.5 flex items-center gap-3">
           <div className="w-10 h-10 rounded-lg bg-blue-100 text-blue-600 flex items-center justify-center font-black">
-            <Users size={20} />
+            <Users size={18} />
           </div>
           <div>
             <div className="text-xl font-black text-slate-900">{players.length}</div>
@@ -314,7 +337,7 @@ export const PlayersManager: React.FC<PlayersManagerProps> = ({
           </div>
           <div>
             <div className="text-xl font-black text-slate-900">{kumiteCount}</div>
-            <div className="text-[11px] font-bold text-slate-500 uppercase tracking-wider">Kumite Entries</div>
+            <div className="text-[11px] font-bold text-slate-500 uppercase tracking-wider">Kumite</div>
           </div>
         </div>
 
@@ -324,11 +347,21 @@ export const PlayersManager: React.FC<PlayersManagerProps> = ({
           </div>
           <div>
             <div className="text-xl font-black text-slate-900">{kataCount}</div>
-            <div className="text-[11px] font-bold text-slate-500 uppercase tracking-wider">Kata Entries</div>
+            <div className="text-[11px] font-bold text-slate-500 uppercase tracking-wider">Indiv. Kata</div>
           </div>
         </div>
 
         <div className="bg-slate-50 border border-slate-200 rounded-xl p-3.5 flex items-center gap-3">
+          <div className="w-10 h-10 rounded-lg bg-purple-100 text-purple-700 flex items-center justify-center font-black">
+            <Users size={18} />
+          </div>
+          <div>
+            <div className="text-xl font-black text-purple-900">{teamKataCount}</div>
+            <div className="text-[11px] font-bold text-purple-700 uppercase tracking-wider">Team Kata</div>
+          </div>
+        </div>
+
+        <div className="bg-slate-50 border border-slate-200 rounded-xl p-3.5 flex items-center gap-3 col-span-2 sm:col-span-1">
           <div className="w-10 h-10 rounded-lg bg-emerald-100 text-emerald-600 flex items-center justify-center font-black">
             🏛️
           </div>
@@ -371,7 +404,8 @@ export const PlayersManager: React.FC<PlayersManagerProps> = ({
           >
             <option value="all">All Events</option>
             <option value="kumite">Kumite</option>
-            <option value="kata">Kata</option>
+            <option value="kata">Individual Kata</option>
+            <option value="team kata">Team Kata</option>
           </select>
 
           {/* Gender Filter */}
@@ -455,15 +489,19 @@ export const PlayersManager: React.FC<PlayersManagerProps> = ({
                         {p.club || 'Independent'}
                       </td>
                       <td className="py-3 px-3 text-center">
-                        <span
-                          className={`inline-block px-2 py-0.5 rounded text-[10px] font-black uppercase tracking-wider ${
-                            isKumite
-                              ? 'bg-blue-100 text-blue-800'
-                              : 'bg-orange-100 text-orange-800'
-                          }`}
-                        >
-                          {p.eventType}
-                        </span>
+                        {((p.eventType || '').toLowerCase() === 'team kata' || (p.category || '').toLowerCase().includes('team kata')) ? (
+                          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-black uppercase tracking-wider bg-purple-100 text-purple-800 border border-purple-200">
+                            <Users size={10} /> Team Kata
+                          </span>
+                        ) : isKumite ? (
+                          <span className="inline-block px-2 py-0.5 rounded text-[10px] font-black uppercase tracking-wider bg-blue-100 text-blue-800 border border-blue-200">
+                            Kumite
+                          </span>
+                        ) : (
+                          <span className="inline-block px-2 py-0.5 rounded text-[10px] font-black uppercase tracking-wider bg-orange-100 text-orange-800 border border-orange-200">
+                            Kata
+                          </span>
+                        )}
                       </td>
                       <td className="py-3 px-3 font-semibold text-slate-700">
                         {p.category}
@@ -577,14 +615,15 @@ export const PlayersManager: React.FC<PlayersManagerProps> = ({
               )}
 
               {/* Player Name */}
+              {/* Player / Team Name */}
               <div>
                 <label className="block text-xs font-extrabold uppercase tracking-wider text-slate-700 mb-1">
-                  Athlete Name <span className="text-red-500">*</span>
+                  {formEvent === 'Team Kata' ? 'Team Name / Competitors' : 'Athlete Name'} <span className="text-red-500">*</span>
                 </label>
                 <input
                   type="text"
                   required
-                  placeholder="e.g. Shamlan Shabeer"
+                  placeholder={formEvent === 'Team Kata' ? "e.g. Team A (Kasun, Nuwan, Amal)" : "e.g. Shamlan Shabeer"}
                   value={formName}
                   onChange={(e) => setFormName(e.target.value)}
                   className="w-full text-xs font-semibold px-3 py-2 bg-slate-50 border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 uppercase"
@@ -620,11 +659,12 @@ export const PlayersManager: React.FC<PlayersManagerProps> = ({
                   </label>
                   <select
                     value={formEvent}
-                    onChange={(e) => setFormEvent(e.target.value as 'Kumite' | 'Kata')}
+                    onChange={(e) => setFormEvent(e.target.value as 'Kumite' | 'Kata' | 'Team Kata')}
                     className="w-full text-xs font-bold px-3 py-2 bg-slate-50 border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 cursor-pointer"
                   >
                     <option value="Kumite">Kumite (Sparring)</option>
-                    <option value="Kata">Kata (Form)</option>
+                    <option value="Kata">Kata (Individual)</option>
+                    <option value="Team Kata">Team Kata (Team)</option>
                   </select>
                 </div>
 

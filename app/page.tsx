@@ -91,17 +91,82 @@ export default function KarateApp() {
         const ws = wb.Sheets[wb.SheetNames[0]];
         const jsonData: any[] = XLSX.utils.sheet_to_json(ws);
 
-        const formattedData: PlayerItem[] = jsonData.map((item: any, idx: number) => ({
-          id: `player_${Date.now()}_${idx}_${Math.random().toString(36).substr(2, 6)}`,
-          championship: item["Championship Name"] || championshipTitle,
-          eventType: item["Event Type"] || "Kumite",
-          category: item["Category"] || "Open",
-          ageGroup: item["Age Group / Grade"] || "All Ages",
-          weight: item["Weight Class"] || "",
-          gender: item["Gender"] || "Male",
-          club: item["Club / Association"] || "Independent",
-          name: item["Player Name"] || `Athlete ${idx + 1}`
-        }));
+        const formattedData: PlayerItem[] = jsonData.map((item: any, idx: number) => {
+          // Robust column extraction supporting common variations
+          const rawEvent = (
+            item["Event Type"] || item["Event"] || item["EventType"] || item["Discipline"] || item["Event Name"] || ""
+          ).toString().trim();
+
+          const rawCategory = (
+            item["Category"] || item["Event Category"] || item["Division"] || item["Kata Category"] || ""
+          ).toString().trim();
+
+          const rawName = (
+            item["Player Name"] || item["Athlete Name"] || item["Name"] || item["Competitor"] || item["Team Name"] || item["Athlete"] || ""
+          ).toString().trim();
+
+          const rawClub = (
+            item["Club / Association"] || item["Club"] || item["Association"] || item["Dojo"] || item["Team"] || item["School"] || ""
+          ).toString().trim();
+
+          const rawAge = (
+            item["Age Group / Grade"] || item["Age Group"] || item["Age"] || item["Grade"] || item["Division Age"] || ""
+          ).toString().trim();
+
+          const rawWeight = (
+            item["Weight Class"] || item["Weight"] || item["WeightClass"] || ""
+          ).toString().trim();
+
+          const rawGender = (
+            item["Gender"] || item["Sex"] || ""
+          ).toString().trim();
+
+          const rawChampionship = (
+            item["Championship Name"] || item["Championship"] || item["Tournament"] || item["Tournament Name"] || ""
+          ).toString().trim();
+
+          const lowerEvent = rawEvent.toLowerCase();
+          const lowerCategory = rawCategory.toLowerCase();
+
+          // Check if this row is Team Kata (either Event Type or Category specifies Team Kata)
+          const isTeamKata = 
+            lowerEvent === 'team kata' ||
+            lowerEvent === 'teamkata' ||
+            lowerEvent === 'team-kata' ||
+            (lowerEvent.includes('team') && lowerEvent.includes('kata')) ||
+            lowerCategory.includes('team kata') ||
+            lowerCategory.includes('team-kata');
+
+          let eventType = "Kumite";
+          if (isTeamKata) {
+            eventType = "Team Kata";
+          } else if (lowerEvent.includes('kata') || lowerCategory.includes('kata')) {
+            eventType = "Kata";
+          } else if (lowerEvent.includes('kumite') || lowerCategory.includes('kumite')) {
+            eventType = "Kumite";
+          } else if (rawEvent) {
+            eventType = rawEvent;
+          }
+
+          // Category normalization
+          let category = rawCategory || (isTeamKata ? 'Team Kata' : 'Open');
+          // If event is Team Kata, ensure category clearly contains "Team Kata" so it does not collide with individual kata
+          if (isTeamKata && !category.toLowerCase().includes('team')) {
+            category = `Team Kata - ${category}`;
+          }
+
+          return {
+            id: `player_${Date.now()}_${idx}_${Math.random().toString(36).substr(2, 6)}`,
+            championship: rawChampionship || championshipTitle,
+            eventType: eventType,
+            category: category,
+            ageGroup: rawAge || "All Ages",
+            weight: (eventType === 'Kata' || eventType === 'Team Kata') ? "" : rawWeight,
+            gender: rawGender || "Male",
+            club: rawClub || "Independent",
+            name: rawName || (isTeamKata ? `Team ${idx + 1}` : `Athlete ${idx + 1}`)
+          };
+        });
 
         if (formattedData[0]?.championship) {
           setChampionshipTitle(formattedData[0].championship);
@@ -161,8 +226,18 @@ export default function KarateApp() {
     });
   };
 
-  const kumiteCount = data.filter((p) => (p.eventType || '').toLowerCase() === 'kumite').length;
-  const kataCount = data.filter((p) => (p.eventType || '').toLowerCase() === 'kata').length;
+  const kumiteCount = data.filter((p) => (p.eventType || '').toLowerCase().includes('kumite')).length;
+  const teamKataCount = data.filter((p) => {
+    const ev = (p.eventType || '').toLowerCase();
+    const cat = (p.category || '').toLowerCase();
+    return ev === 'team kata' || ev.includes('team kata') || cat.includes('team kata');
+  }).length;
+  const indivKataCount = data.filter((p) => {
+    const ev = (p.eventType || '').toLowerCase();
+    const cat = (p.category || '').toLowerCase();
+    return (ev === 'kata' || ev.includes('kata')) && !ev.includes('team') && !cat.includes('team kata');
+  }).length;
+  const totalKataCount = indivKataCount + teamKataCount;
 
   return (
     <div className="min-h-screen bg-[#f8fafc] text-slate-900 font-sans print:bg-white print:min-h-0">
@@ -327,7 +402,9 @@ export default function KarateApp() {
                     </div>
                   </div>
                   <div className="pt-4 mt-4 border-t border-slate-100 flex items-center justify-between text-xs font-bold text-orange-600">
-                    <span>{kataCount} Kata Competitors</span>
+                    <span>
+                      {totalKataCount} Kata {teamKataCount > 0 ? `(${indivKataCount} Indiv, ${teamKataCount} Teams)` : 'Competitors'}
+                    </span>
                     <span className="group-hover:translate-x-1 transition-transform">View Sheets →</span>
                   </div>
                 </div>

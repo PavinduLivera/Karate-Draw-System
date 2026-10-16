@@ -2,6 +2,7 @@ export interface Player {
   name: string;
   club: string;
   category: string;
+  eventType?: string;
   weight?: string;
   gender: string;
   ageGroup?: string;
